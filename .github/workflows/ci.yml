@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check manifest versions match
+        run: |
+          V1=$(node -p "require('./manifest.json').version")
+          V2=$(node -p "require('./manifest.firefox.json').version")
+          if [ "$V1" != "$V2" ]; then
+            echo "❌ Version mismatch: manifest.json=$V1, manifest.firefox.json=$V2"
+            exit 1
+          fi
+          echo "✅ Versions match: $V1"

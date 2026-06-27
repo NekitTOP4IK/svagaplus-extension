@@ -1,0 +1,80 @@
+.tcb-badge-img {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  min-height: 18px !important;
+  max-width: 18px !important;
+  max-height: 18px !important;
+  vertical-align: middle;
+  border-radius: 2px;
+  object-fit: contain;
+  display: inline-block;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* FFZ mode: badges inserted directly into .chat-line__message--badges */
+.chat-line__message--badges .tcb-badge-img:not(:last-child) {
+  margin-right: 4px;
+}
+.chat-line__message--badges .tcb-badge-img:last-child {
+  margin-right: 4px;
+}
+
+/* Fallback: wrapper inserted before username when badges container is absent */
+.tcb-badge-list {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  margin-right: 4px;
+  vertical-align: -4px;
+}
+
+.seventv-chat-user-badge-list .tcb-badge-img:not(:last-child),
+.tcb-badge-list-stv .tcb-badge-img:not(:last-child) {
+  margin-right: 4px;
+}
+
+/* Gap between the last native 7TV badge and our first badge */
+.seventv-chat-user-badge-list .seventv-chat-badge:not(.tcb-badge-img) + .tcb-badge-img {
+  margin-left: 4px;
+}
+
+/* Fallback container when 7TV has no badge list of its own */
+.tcb-badge-list-stv {
+  margin-right: 4px;
+}
+
+#tcb-custom-tooltip {
+  position: fixed;
+  z-index: 9999999;
+  pointer-events: none;
+  display: none;
+  white-space: nowrap;
+
+  background: rgba(24, 24, 27, 0.97);
+  color: #efeff1;
+  font-family: 'Inter', 'Roobert', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 5px 9px;
+  border-radius: 4px;
+  border-top: 2px solid #143fff;
+
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.3),
+    0 4px 10px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+#tcb-custom-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(24, 24, 27, 0.97);
+}

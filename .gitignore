@@ -1,0 +1,18 @@
+# Local env overrides (may contain private URLs)
+.env
+
+# Signing scripts (may contain AMO API credentials)
+sign_firefox.bat
+sign_firefox.sh
+
+# Build output
+dist_*/
+web-ext-artifacts/
+*.zip
+*.crx
+
+# Node
+node_modules/
+
+# Other
+*.pem

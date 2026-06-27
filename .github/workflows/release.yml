@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build prod targets
+        env:
+          BACKEND_URL_PROD: ${{ secrets.BACKEND_URL_PROD }}
+          BOT_USERNAME_PROD: ${{ secrets.BOT_USERNAME_PROD }}
+        run: |
+          node build.js prod
+          node build.js firefox_prod
+
+      - name: Extract changelog entry
+        run: |
+          awk '/^## \[v/{if(p) exit; p=1; next} p' CHANGELOG.md > CHANGELOG_LATEST.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: CHANGELOG_LATEST.md
+          files: |
+            dist_prod.zip
+            dist_firefox_prod.zip

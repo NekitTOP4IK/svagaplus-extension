@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Tribute Alerts Twitch Extension",
+  "version": "1.3.0",
+  "description": "Расширение для сервиса Tribute Alerts. Позволяет чатерам с подпиской получить значок подписчика в чате! Made for Olesha with love <3",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://__BACKEND_HOST__/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.twitch.tv/*"
+      ],
+      "js": [
+        "src/config.js",
+        "src/content/socket.io.js",
+        "src/content/core.js",
+        "src/content/twitch.js",
+        "src/content/seventv.js",
+        "src/content/usercard.js",
+        "src/content/observer.js"
+      ],
+      "css": [
+        "src/content/styles.css"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "64": "icons/icon64.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/*"
+      ],
+      "matches": [
+        "*://*.twitch.tv/*"
+      ]
+    }
+  ],
+  "icons": {
+    "64": "icons/icon64.png"
+  }
+}
