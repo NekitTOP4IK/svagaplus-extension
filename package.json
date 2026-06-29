@@ -1,1 +1,32 @@
-{}
+{
+  "name": "svagaplus-extension",
+  "version": "1.3.0",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "webpack --config webpack.config.js",
+    "build:firefox": "webpack --config webpack.config.js --env firefox",
+    "build:prod": "webpack --config webpack.config.js --env prod",
+    "build:prod:firefox": "webpack --config webpack.config.js --env prod --env firefox",
+    "build:all": "npm run build && npm run build:firefox",
+    "watch": "webpack --watch --config webpack.config.js",
+    "watch:firefox": "webpack --watch --config webpack.config.js --env firefox"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/firefox-webext-browser": "^120.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/webextension-polyfill": "^0.12.5",
+    "copy-webpack-plugin": "^12.0.2",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.6.3",
+    "webpack": "^5.96.1",
+    "webpack-cli": "^5.1.4"
+  }
+}
