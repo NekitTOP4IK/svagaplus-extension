@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Tribute Alerts Twitch Extension",
+  "name": "Свага+",
   "version": "__VERSION__",
-  "description": "Расширение для сервиса Tribute Alerts. Позволяет чатерам с подпиской получить значок подписчика в чате! Made for Olesha with love <3",
+  "description": "Расширение Свага+ для Twitch: подписочные баджи, Соц. рейтинг и локальные улучшения чата.",
   "permissions": [
     "storage",
     "activeTab",
@@ -11,7 +11,7 @@
     "tabs"
   ],
   "host_permissions": [
-    "*://__BACKEND_HOST__/*"
+    "__BACKEND_URL__/*"
   ],
   "content_scripts": [
     {
@@ -19,23 +19,17 @@
         "*://*.twitch.tv/*"
       ],
       "js": [
-        "src/shared/config.js",
-        "src/tribute-alerts/content/socket.io.js",
-        "src/tribute-alerts/content/core.js",
-        "src/tribute-alerts/content/twitch.js",
-        "src/tribute-alerts/content/seventv.js",
-        "src/tribute-alerts/content/usercard.js",
-        "src/tribute-alerts/content/observer.js",
+        "src/vendor/socket.io.js",
         "src/app/content.js"
       ],
       "css": [
-        "src/tribute-alerts/content/styles.css"
+        "src/features/tribute-badges/styles.css"
       ],
       "run_at": "document_end"
     }
   ],
   "action": {
-    "default_popup": "src/tribute-alerts/popup/popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_icon": {
       "64": "icons/icon64.png"
     }
@@ -43,10 +37,12 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "icons/*"
+        "icons/*",
+        "src/app/viewer-auth-callback.html"
       ],
       "matches": [
-        "*://*.twitch.tv/*"
+        "*://*.twitch.tv/*",
+        "__FRONTEND_URL__/*"
       ]
     }
   ],

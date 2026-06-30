@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Свага+</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <img class="brand-mark" src="../../icons/icon64.png" alt="" />
+        <div class="brand-copy">
+          <h1>Свага+</h1>
+          <p>Свагометр и Соц. рейтинг</p>
+        </div>
+      </header>
+
+      <section class="panel" aria-labelledby="accountTitle">
+        <div class="panel-head">
+          <h2 id="accountTitle">Аккаунт</h2>
+          <span id="connectionState" class="pill">Проверка...</span>
+        </div>
+
+        <div id="connectedAccount" class="account" hidden>
+          <img id="accountAvatar" class="avatar" alt="" />
+          <div class="account-copy">
+            <div id="accountLogin" class="account-login"></div>
+            <div id="accountTelegram" class="account-meta"></div>
+          </div>
+        </div>
+
+        <div id="disconnectedAccount" class="account account--empty" hidden>
+          <div class="account-copy">
+            <div class="account-login">Аккаунт не подключен</div>
+            <div class="account-meta">Подключите Svaga+ viewer account.</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="primaryAction" class="button button--primary" type="button">Подключить аккаунт</button>
+          <button id="secondaryAction" class="button button--text" type="button" hidden>Сменить аккаунт</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="settingsTitle">
+        <div class="panel-head">
+          <h2 id="settingsTitle">Настройки</h2>
+        </div>
+
+        <div class="setting setting--readonly">
+          <div>
+            <div class="setting-label">Бейджи подписчиков</div>
+            <div class="setting-note">Всегда включено</div>
+          </div>
+          <span class="pill pill--on">Вкл.</span>
+        </div>
+
+        <div class="setting setting--readonly">
+          <div>
+            <div class="setting-label">Цвета ников</div>
+            <div class="setting-note">Всегда включено</div>
+          </div>
+          <span class="pill pill--on">Вкл.</span>
+        </div>
+
+        <label class="setting setting--toggle" for="socialRatingToggle">
+          <div>
+            <div class="setting-label">Соц. рейтинг</div>
+            <div class="setting-note">Отключение действует после обновления вкладки Twitch.</div>
+          </div>
+          <input id="socialRatingToggle" type="checkbox" />
+        </label>
+      </section>
+
+      <footer class="footer" hidden>
+        <button id="openSettings" class="button button--secondary" type="button">Открыть настройки</button>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

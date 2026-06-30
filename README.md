@@ -1,26 +1,26 @@
-# Tribute Alerts Twitch Extension
+# Свага+ Twitch Extension
 
-Браузерное расширение для сервиса [Tribute Alerts](https://tributealerts.nekittop4ik.space).
+Браузерное расширение Свага+ для Twitch.
 
-Отображает кастомные бейджи и цвета ников подписчиков Tribute прямо в чате Twitch — в нативном чате и в режиме 7TV.
+Отображает кастомные бейджи, цвета ников и Соц. рейтинг прямо в чате Twitch.
 
 ---
 
 ## Установка
 
-Скачать готовое расширение можно на [странице установки](https://tributealerts.nekittop4ik.space/extension/download).
+Скачать готовое расширение можно на странице установки проекта.
 
-Поддерживаемые браузеры: **Chrome (или иные браузеры на Chromium)** (Web Store / ZIP), **Firefox** (AMO / .xpi).
+Поддерживаемые браузеры: **Chrome** и **Firefox**.
 
 ---
 
 ## Как это работает
 
-Расширение встраивается в страницы `twitch.tv`, определяет текущий канал и Twitch-логин пользователя, загружает список подписчиков с их бейджами и цветами ников, подключается к бэкенду по WebSocket для получения обновлений в реальном времени и отображает всё это в нативном чате и в режиме 7TV.
+Расширение встраивается в страницы `twitch.tv`, определяет текущий канал и Twitch-логин пользователя, загружает список зрителей с их бейджами и цветами ников, подключается к бэкенду по WebSocket для получения обновлений в реальном времени и отображает всё это в нативном чате и в режиме 7TV.
 
-**Привязка аккаунта:** нажмите кнопку в попапе расширения → откроется Telegram-бот → подтвердите привязку Twitch к Tribute.
+**Привязка аккаунта:** нажмите кнопку в попапе расширения, затем завершите viewer-connect.
 
-**Отвязка аккаунта:** выполняется через [страницу настроек](https://tributealerts.nekittop4ik.space/viewer/settings) — там личность пользователя подтверждается на 100%.
+**Настройки:** в попапе есть переключатель `Соц. рейтинг`; выключение действует после обновления вкладки Twitch.
 
 ---
 
@@ -29,23 +29,31 @@
 ```
 ├── manifest.json             # Manifest V3 — Chrome
 ├── manifest.firefox.json     # Manifest V3 — Firefox (gecko ID + update_url)
-├── CHANGELOG.md
 ├── icons/
 │   └── icon64.png
 └── src/
-    ├── config.js             # Глобальный CONFIG: BACKEND_URL, BOT_USERNAME
-    ├── content/
-    │   ├── core.js           # Ядро: кэш пользователей, fetchBadges, initSocket, tooltip
-    │   ├── observer.js       # MutationObserver — запускает всю систему
-    │   ├── twitch.js         # Нативный чат Twitch (.chat-line__message)
-    │   ├── seventv.js        # Чат 7TV (.seventv-message)
-    │   ├── usercard.js       # Карточки пользователей (7TV + нативная Twitch)
-    │   ├── styles.css        # Стили бейджей и тултипа
-    │   └── socket.io.js      # Socket.IO клиент v4.7.5 (unminified)
-    └── popup/
-        ├── popup.html        # UI попапа со всеми состояниями
-        ├── popup.js          # Логика попапа: статус, привязка, polling, баннер обновления
-        └── tribute-alerts.svg
+    ├── app/
+    │   ├── background.ts
+    │   ├── background-firefox.ts
+    │   ├── content.ts
+    │   ├── viewer-auth-callback.html
+    │   └── viewer-auth-callback.ts
+    ├── popup/
+    │   ├── popup.html
+    │   ├── popup.css
+    │   └── popup.ts
+    ├── shared/
+    │   ├── api.ts
+    │   ├── browser.ts
+    │   ├── config.ts
+    │   ├── storage.ts
+    │   ├── twitch.ts
+    │   └── types.ts
+    ├── features/
+    │   ├── tribute-badges/
+    │   └── social-rating/
+    └── vendor/
+        └── socket.io.js      # Vendor Socket.IO client
 ```
 
 ---

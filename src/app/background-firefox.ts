@@ -1,0 +1,3 @@
+import './background';
+
+export {};
