@@ -6,7 +6,7 @@
   "scripts": {
     "build": "webpack --config webpack.config.js",
     "build:firefox": "webpack --config webpack.config.js --env firefox",
-    "build:prod": "webpack --config webpack.config.js --env prod",
+    "build:prod": "webpack --config webpack.config.js --env prod && node scripts/package-chrome-prod.cjs",
     "build:prod:firefox": "webpack --config webpack.config.js --env prod --env firefox",
     "build:all": "npm run build && npm run build:firefox",
     "watch": "webpack --watch --config webpack.config.js",

@@ -8,6 +8,7 @@ sign_firefox.sh
 # Build output
 dist_*/
 dist-types/
+artifacts/
 web-ext-artifacts/
 *.zip
 *.crx
