@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "lib": [
       "DOM",
       "DOM.Iterable",
@@ -13,8 +13,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "dist-types",
-    "downlevelIteration": true
+    "rootDir": "src",
+    "outDir": "dist-types"
   },
   "include": [
     "src/**/*.ts",
