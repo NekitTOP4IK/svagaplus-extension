@@ -5,9 +5,7 @@
   "description": "Расширение Свага+ для Twitch: только для тех, кто хочет быть на лютой СВАГЕ",
   "permissions": [
     "storage",
-    "activeTab",
     "identity",
-    "downloads",
     "tabs"
   ],
   "host_permissions": [

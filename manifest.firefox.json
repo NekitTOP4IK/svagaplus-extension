@@ -11,9 +11,7 @@
   },
   "permissions": [
     "storage",
-    "activeTab",
     "identity",
-    "downloads",
     "tabs"
   ],
   "host_permissions": [
