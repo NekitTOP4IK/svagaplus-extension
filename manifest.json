@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Свага+",
   "version": "__VERSION__",
-  "description": "Расширение Свага+ для Twitch: подписочные баджи, Соц. рейтинг и локальные улучшения чата.",
+  "description": "Расширение Свага+ для Twitch: только для тех, кто хочет быть на лютой СВАГЕ",
   "permissions": [
     "storage",
     "activeTab",

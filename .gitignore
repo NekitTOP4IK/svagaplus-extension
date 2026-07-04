@@ -7,6 +7,7 @@ sign_firefox.sh
 
 # Build output
 dist_*/
+dist-types/
 web-ext-artifacts/
 *.zip
 *.crx
@@ -16,3 +17,9 @@ node_modules/
 
 # Other
 *.pem
+
+# Agent / local tooling artifacts
+.claude/
+CLAUDE.md
+AGENTS.md
+docs/superpowers/

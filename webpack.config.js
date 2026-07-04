@@ -4,10 +4,10 @@ const CopyPlugin = require('copy-webpack-plugin');
 const { version } = require('./package.json');
 
 const DEFAULTS = {
-  BACKEND_URL_PROD: 'https://tributealerts.nekittop4ik.space',
-  BACKEND_URL_DEV: 'http://localhost:5016',
-  FRONTEND_URL_PROD: 'https://tributealerts.nekittop4ik.space',
-  FRONTEND_URL_DEV: 'http://localhost:5016',
+  BACKEND_URL_PROD: 'https://svagaplus.nekittop4ik.qzz.io',
+  BACKEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
+  FRONTEND_URL_PROD: 'https://svagaplus.nekittop4ik.qzz.io',
+  FRONTEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
 };
 
 function backendUrl(isProd) {
@@ -67,12 +67,6 @@ module.exports = (env = {}) => {
                 .replace(/__FRONTEND_URL__/g, frontend)
                 .replace(/__BACKEND_HOST__/g, backendHost)
                 .replace(/__UPDATE_URL__/g, updateUrl);
-              if (isFirefox && !isProd) {
-                manifest = manifest.replace(
-                  /,\s*"browser_specific_settings":\s*\{\s*"gecko":\s*\{[\s\S]*?\}\s*\}/,
-                  ''
-                );
-              }
               return manifest;
             },
           },

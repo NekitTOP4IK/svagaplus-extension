@@ -197,7 +197,7 @@ function initSocket(channelName: string): void {
   if (typeof io === 'undefined') return;
 
   socket = io(BACKEND_URL, {
-    transports: ['polling', 'websocket'],
+    transports: ['websocket'],
     reconnectionDelay: 1000,
     reconnectionDelayMax: 15000,
     randomizationFactor: 0.7,

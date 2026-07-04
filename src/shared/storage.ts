@@ -1,9 +1,10 @@
 import browser from './browser';
-import type { ExtensionSettings, RuntimeChannelState, ViewerAccount } from './types';
+import type { ExtensionSettings, RuntimeChannelState, ViewerAccount, ViewerAuthFeedback } from './types';
 
 const SETTINGS_KEY = 'svagaplus_settings';
 const VIEWER_ACCOUNT_KEY = 'svagaplus_viewer_account';
 const CHANNEL_STATE_KEY = 'svagaplus_runtime_channel_state';
+const VIEWER_AUTH_FEEDBACK_KEY = 'svagaplus_viewer_auth_feedback';
 
 export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   socialRatingEnabled: true,
@@ -58,6 +59,55 @@ export async function setViewerAccount(account: ViewerAccount): Promise<ViewerAc
 
 export async function clearViewerAccount(): Promise<void> {
   await browser.storage.local.remove(VIEWER_ACCOUNT_KEY);
+}
+
+export async function getViewerAuthFeedback(): Promise<ViewerAuthFeedback | null> {
+  const stored = await readValue<unknown>(VIEWER_AUTH_FEEDBACK_KEY);
+  if (!isRecord(stored)) return null;
+  const error = typeof stored.error === 'string' || stored.error === null ? stored.error : null;
+  const details = typeof stored.details === 'string' || stored.details === null ? stored.details : null;
+  const redirectUri = typeof stored.redirectUri === 'string' || stored.redirectUri === null ? stored.redirectUri : null;
+  const actualRedirectUri =
+    typeof stored.actualRedirectUri === 'string' || stored.actualRedirectUri === null ? stored.actualRedirectUri : null;
+  const source =
+    stored.source === 'oauth' ||
+    stored.source === 'background' ||
+    stored.source === 'popup' ||
+    stored.source === 'api'
+      ? stored.source
+      : null;
+  const stage =
+    stored.stage === 'authorize_url' ||
+    stored.stage === 'redirect_uri_validation' ||
+    stored.stage === 'launch_web_auth_flow' ||
+    stored.stage === 'oauth_callback_validation' ||
+    stored.stage === 'token_exchange' ||
+    stored.stage === 'viewer_hydration' ||
+    stored.stage === 'popup_message_transport' ||
+    stored.stage === 'settings_update'
+      ? stored.stage
+      : null;
+  const updatedAt = typeof stored.updatedAt === 'number' ? stored.updatedAt : null;
+  if (
+    error === undefined ||
+    details === undefined ||
+    redirectUri === undefined ||
+    actualRedirectUri === undefined ||
+    updatedAt === null
+  ) {
+    return null;
+  }
+  return { error, details, redirectUri, actualRedirectUri, source, stage, updatedAt };
+}
+
+export async function setViewerAuthFeedback(feedback: Omit<ViewerAuthFeedback, 'updatedAt'>): Promise<ViewerAuthFeedback> {
+  const next: ViewerAuthFeedback = { ...feedback, updatedAt: Date.now() };
+  await browser.storage.local.set({ [VIEWER_AUTH_FEEDBACK_KEY]: next });
+  return next;
+}
+
+export async function clearViewerAuthFeedback(): Promise<void> {
+  await browser.storage.local.remove(VIEWER_AUTH_FEEDBACK_KEY);
 }
 
 export async function getRuntimeChannelState(): Promise<RuntimeChannelState | null> {

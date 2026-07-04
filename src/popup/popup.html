@@ -26,7 +26,14 @@
           <img id="accountAvatar" class="avatar" alt="" />
           <div class="account-copy">
             <div id="accountLogin" class="account-login"></div>
-            <div id="accountTelegram" class="account-meta"></div>
+            <div id="accountTelegramMeta" class="account-meta">
+              <span id="accountTelegramWarning" class="account-meta-icon" hidden aria-hidden="true">
+                <svg viewBox="0 0 20 20" focusable="false">
+                  <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
+                </svg>
+              </span>
+              <span id="accountTelegram"></span>
+            </div>
           </div>
         </div>
 
@@ -39,7 +46,7 @@
 
         <div class="actions">
           <button id="primaryAction" class="button button--primary" type="button">Подключить аккаунт</button>
-          <button id="secondaryAction" class="button button--text" type="button" hidden>Сменить аккаунт</button>
+          <button id="secondaryAction" class="button button--text" type="button" hidden>Выйти</button>
         </div>
       </section>
 
@@ -48,26 +55,10 @@
           <h2 id="settingsTitle">Настройки</h2>
         </div>
 
-        <div class="setting setting--readonly">
-          <div>
-            <div class="setting-label">Бейджи подписчиков</div>
-            <div class="setting-note">Всегда включено</div>
-          </div>
-          <span class="pill pill--on">Вкл.</span>
-        </div>
-
-        <div class="setting setting--readonly">
-          <div>
-            <div class="setting-label">Цвета ников</div>
-            <div class="setting-note">Всегда включено</div>
-          </div>
-          <span class="pill pill--on">Вкл.</span>
-        </div>
-
         <label class="setting setting--toggle" for="socialRatingToggle">
           <div>
             <div class="setting-label">Соц. рейтинг</div>
-            <div class="setting-note">Отключение действует после обновления вкладки Twitch.</div>
+            <div class="setting-note">Для применения изменений обновите страницу.</div>
           </div>
           <input id="socialRatingToggle" type="checkbox" />
         </label>
@@ -76,6 +67,18 @@
       <footer class="footer" hidden>
         <button id="openSettings" class="button button--secondary" type="button">Открыть настройки</button>
       </footer>
+
+      <section id="popupErrorBanner" class="toast" hidden aria-live="polite">
+        <div class="toast-copy">
+          <div id="popupErrorTitle" class="toast-title"></div>
+          <div id="popupErrorDetail" class="toast-detail"></div>
+        </div>
+        <div class="toast-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" focusable="false">
+            <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
+          </svg>
+        </div>
+      </section>
     </main>
     <script src="popup.js"></script>
   </body>

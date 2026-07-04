@@ -1,19 +1,20 @@
 import browser from '../shared/browser';
 import {
   BACKEND_URL,
-  FRONTEND_URL,
-  VIEWER_AUTH_CALLBACK_PATH,
-  VIEWER_CONNECT_PATH,
+  VIEWER_AUTH_REDIRECT_PATH,
 } from '../shared/config';
-import { getViewerMe } from '../shared/api';
+import { getTwitchAuthorizeUrl, getViewerMe, linkViewerTwitch } from '../shared/api';
 import {
   clearViewerAccount,
+  clearViewerAuthFeedback,
   getExtensionSettings,
+  getViewerAuthFeedback,
   getViewerAccount,
   setExtensionSettings,
+  setViewerAuthFeedback,
   setViewerAccount,
 } from '../shared/storage';
-import type { ExtensionSettings, ViewerAccount } from '../shared/types';
+import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../shared/types';
 import {
   castVote,
   deleteAlias,
@@ -38,6 +39,18 @@ type ViewerAccountResponse = {
   ok: false;
   error: string;
 };
+
+type ViewerConnectResponse =
+  | { ok: true }
+  | {
+    ok: false;
+    error: string;
+    details?: string;
+    redirectUri?: string;
+    actualRedirectUri?: string;
+    source?: ViewerAuthFeedback['source'];
+    stage?: ViewerAuthFeedback['stage'];
+  };
 
 const LOGIN_RE = /^[a-z0-9_]{3,25}$/;
 const MAX_ALIAS_LENGTH = 64;
@@ -231,29 +244,149 @@ function sanitizeViewerAccount(account: ViewerAccount | null): Omit<ViewerAccoun
   };
 }
 
-function viewerAuthCallbackUrl(): string {
-  return browser.runtime.getURL(VIEWER_AUTH_CALLBACK_PATH);
+function getViewerAuthRedirectUrl(): string | null {
+  if (!browser.identity?.getRedirectURL) return null;
+  return browser.identity.getRedirectURL(VIEWER_AUTH_REDIRECT_PATH);
 }
 
-function startConnectUrl(): string {
-  const url = new URL(VIEWER_CONNECT_PATH, FRONTEND_URL);
-  url.searchParams.set('extension', '1');
-  url.searchParams.set('return', viewerAuthCallbackUrl());
-  return url.toString();
+function logViewerAuthFailure(context: {
+  error: string;
+  details?: string;
+  redirectUri?: string;
+  actualRedirectUri?: string;
+  source?: ViewerAuthFeedback['source'];
+  stage?: ViewerAuthFeedback['stage'];
+}): void {
+  console.error('[svagaplus][auth]', context);
 }
 
-function isViewerAuthCallbackSender(sender: browser.Runtime.MessageSender): boolean {
-  const senderUrl = sender.url || '';
-  const expectedUrl = browser.runtime.getURL(VIEWER_AUTH_CALLBACK_PATH);
-  return senderUrl.split('#')[0].split('?')[0] === expectedUrl;
+async function failViewerConnect(result: Extract<ViewerConnectResponse, { ok: false }>): Promise<ViewerConnectResponse> {
+  logViewerAuthFailure(result);
+  await setViewerAuthFeedback({
+    error: result.error,
+    details: result.details ?? null,
+    redirectUri: result.redirectUri ?? null,
+    actualRedirectUri: result.actualRedirectUri ?? null,
+    source: result.source ?? 'oauth',
+    stage: result.stage ?? null,
+  });
+  return result;
 }
 
-async function openConnect(): Promise<{ ok: true } | { ok: false; error: string }> {
+async function openConnect(): Promise<ViewerConnectResponse> {
   try {
-    await browser.tabs.create({ url: startConnectUrl(), active: true });
+    await clearViewerAuthFeedback();
+    const redirectUri = getViewerAuthRedirectUrl();
+    if (!redirectUri) {
+      return failViewerConnect({
+        ok: false,
+        error: 'identity_unavailable',
+        source: 'background',
+        stage: 'launch_web_auth_flow',
+      });
+    }
+
+    const state = crypto.randomUUID();
+    const authorize = await getTwitchAuthorizeUrl(redirectUri, undefined, state);
+    if (!authorize.ok || !authorize.url) {
+      return failViewerConnect({
+        ok: false,
+        error: 'authorize_url_failed',
+        redirectUri,
+        source: 'api',
+        stage: 'authorize_url',
+      });
+    }
+
+    const authorizeUrl = new URL(authorize.url);
+    const actualRedirectUri = authorizeUrl.searchParams.get('redirect_uri');
+    if (actualRedirectUri && actualRedirectUri !== redirectUri) {
+      return failViewerConnect({
+        ok: false,
+        error: 'redirect_uri_mismatch',
+        details: 'Сервер авторизации вернул другой redirect URI.',
+        redirectUri,
+        actualRedirectUri,
+        source: 'api',
+        stage: 'redirect_uri_validation',
+      });
+    }
+
+    const callbackUrl = await browser.identity.launchWebAuthFlow({
+      interactive: true,
+      url: authorize.url,
+    });
+    if (!callbackUrl) {
+      return failViewerConnect({
+        ok: false,
+        error: 'oauth_cancelled',
+        source: 'oauth',
+        stage: 'launch_web_auth_flow',
+      });
+    }
+
+    const callback = new URL(callbackUrl);
+    if (callback.searchParams.get('state') !== state) {
+      return failViewerConnect({
+        ok: false,
+        error: 'state_mismatch',
+        source: 'oauth',
+        stage: 'oauth_callback_validation',
+      });
+    }
+
+    const error = callback.searchParams.get('error');
+    if (error) {
+      return failViewerConnect({
+        ok: false,
+        error,
+        details: callback.searchParams.get('error_description') ?? undefined,
+        redirectUri,
+        actualRedirectUri: `${callback.origin}${callback.pathname}`,
+        source: 'oauth',
+        stage: 'oauth_callback_validation',
+      });
+    }
+
+    const code = callback.searchParams.get('code');
+    if (!code) {
+      return failViewerConnect({
+        ok: false,
+        error: 'missing_code',
+        source: 'oauth',
+        stage: 'oauth_callback_validation',
+      });
+    }
+
+    const auth = await linkViewerTwitch(code, redirectUri);
+    if (!auth.ok || !auth.token) {
+      return failViewerConnect({
+        ok: false,
+        error: 'token_exchange_failed',
+        source: 'api',
+        stage: 'token_exchange',
+      });
+    }
+
+    const hydrated = await hydrateAccount(auth.token);
+    if (!hydrated.ok) {
+      return failViewerConnect({
+        ok: false,
+        error: hydrated.error,
+        source: hydrated.error === 'invalid_token' ? 'background' : 'api',
+        stage: 'viewer_hydration',
+      });
+    }
+    await clearViewerAuthFeedback();
     return { ok: true };
-  } catch {
-    return { ok: false, error: 'tab_open_failed' };
+  } catch (error) {
+    return failViewerConnect({
+      ok: false,
+      error: 'oauth_failed',
+      details: error instanceof Error ? error.message : undefined,
+      source: 'oauth',
+      stage: 'launch_web_auth_flow',
+    });
   }
 }
 
@@ -272,6 +405,7 @@ async function hydrateAccount(token: string): Promise<ViewerAccountResponse> {
     lastCheckedAt: Date.now(),
   };
   await setViewerAccount(account);
+  await clearViewerAuthFeedback();
   return { ok: true, account: sanitizeViewerAccount(account) };
 }
 
@@ -306,15 +440,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
   switch ((message as { type: string }).type) {
     case 'viewer:startConnect':
       return openConnect();
-    case 'viewer:completeConnect': {
-      if (!isViewerAuthCallbackSender(sender)) {
-        return Promise.resolve({ ok: false, error: 'forbidden_sender' });
-      }
-      const token = typeof (message as { token?: unknown }).token === 'string' ? (message as { token: string }).token : '';
-      return token ? hydrateAccount(token) : Promise.resolve({ ok: false, error: 'missing_token' });
-    }
     case 'viewer:getAccount':
       return getViewerAccount().then((account) => ({ ok: true, account: sanitizeViewerAccount(account) }));
+    case 'viewer:getAuthFeedback':
+      return getViewerAuthFeedback().then((feedback) => ({ ok: true, feedback }));
     case 'viewer:refreshAccount':
       return (async (): Promise<ViewerAccountResponse> => {
         const account = await getViewerAccount();
@@ -322,7 +451,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         return hydrateAccount(account.token);
       })();
     case 'viewer:disconnect':
-      return clearViewerAccount().then(() => ({ ok: true }));
+      return Promise.all([clearViewerAccount(), clearViewerAuthFeedback()]).then(() => ({ ok: true }));
     case 'settings:get':
       return getExtensionSettings().then((settings) => ({ ok: true, settings }));
     case 'settings:update': {

@@ -10,6 +10,28 @@ export interface ViewerAccount {
   lastCheckedAt: number;
 }
 
+export type ViewerAuthSource = 'oauth' | 'background' | 'popup' | 'api';
+
+export type ViewerAuthStage =
+  | 'authorize_url'
+  | 'redirect_uri_validation'
+  | 'launch_web_auth_flow'
+  | 'oauth_callback_validation'
+  | 'token_exchange'
+  | 'viewer_hydration'
+  | 'popup_message_transport'
+  | 'settings_update';
+
+export interface ViewerAuthFeedback {
+  error: string | null;
+  details: string | null;
+  redirectUri: string | null;
+  actualRedirectUri: string | null;
+  source: ViewerAuthSource | null;
+  stage: ViewerAuthStage | null;
+  updatedAt: number;
+}
+
 export interface RuntimeChannelState {
   channelLogin: string | null;
   ratingEnabledForChannel: boolean | null;

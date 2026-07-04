@@ -600,17 +600,6 @@ export async function injectBadge(
   setLabel(label, channelLogin, isLow);
   topRow.appendChild(label);
 
-  if (channelLogin) {
-    const link = document.createElement('a');
-    link.className = 'tsr-link';
-    link.href = `${__FRONTEND_URL__}/profile/${encodeURIComponent(card.login)}?channel=${encodeURIComponent(channelLogin)}`;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = 'Профиль →';
-    link.addEventListener('click', (e) => e.stopPropagation());
-    topRow.appendChild(link);
-  }
-
   wrap.appendChild(topRow);
 
   await renderAwards(wrap, channelLogin, card.login);

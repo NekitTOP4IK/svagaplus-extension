@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Свага+",
   "version": "__VERSION__",
-  "description": "Расширение Свага+ для Twitch: подписочные баджи, Соц. рейтинг и локальные улучшения чата.",
+  "description": "Расширение Свага+ для Twitch: только для тех, кто хочет быть на лютой СВАГЕ.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "tributealerts@nekittop4ik.space",
+      "id": "tributealerts@nekittop4ik.qzz.io",
       "update_url": "__UPDATE_URL__"
     }
   },

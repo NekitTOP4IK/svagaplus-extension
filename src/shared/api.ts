@@ -113,6 +113,18 @@ export interface V3ChannelBadgesResponse {
   viewers: Record<string, V3ViewerBadges>;
 }
 
+export interface TwitchAuthorizeUrlResult {
+  ok: boolean;
+  url: string | null;
+}
+
+export interface ViewerTwitchAuthResult {
+  ok: boolean;
+  token: string | null;
+  telegramLinked: boolean;
+  twitchLogin: string | null;
+}
+
 export async function getViewerMe(token: string): Promise<ViewerMeResult> {
   const res = await fetch(apiUrl('/api/viewer/me'), {
     headers: {
@@ -140,6 +152,41 @@ export async function getViewerMe(token: string): Promise<ViewerMeResult> {
   } catch {
     return { ok: false, status: res.status, unauthorized: false, data: null };
   }
+}
+
+export async function getTwitchAuthorizeUrl(
+  redirectUri: string,
+  scope?: string,
+  state?: string,
+): Promise<TwitchAuthorizeUrlResult> {
+  const params = new URLSearchParams({ redirect_uri: redirectUri });
+  if (scope) params.set('scope', scope);
+  if (state) params.set('state', state);
+  const payload = await requestJson<JsonObject>(`/api/auth/twitch/authorize-url?${params.toString()}`);
+  return {
+    ok: Boolean(payload?.success && typeof payload?.url === 'string' && payload.url),
+    url: typeof payload?.url === 'string' ? payload.url : null,
+  };
+}
+
+export async function linkViewerTwitch(
+  twitchCode: string,
+  redirectUri: string,
+): Promise<ViewerTwitchAuthResult> {
+  const payload = await requestJson<JsonObject>('/api/auth/twitch/viewer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      twitch_code: twitchCode,
+      redirect_uri: redirectUri,
+    }),
+  });
+  return {
+    ok: Boolean(payload?.success && typeof payload?.token === 'string' && payload.token),
+    token: typeof payload?.token === 'string' ? payload.token : null,
+    telegramLinked: Boolean(payload?.telegram_linked),
+    twitchLogin: typeof payload?.twitch_login === 'string' ? payload.twitch_login : null,
+  };
 }
 
 export async function getChannelViewerBadges(channel: string, viewer: string): Promise<V3ViewerBadges | null> {
