@@ -26,12 +26,16 @@ const viewerBadgeInflight: Record<string, { promise: Promise<Badge[]>; resolve: 
 const viewerBadgeBatchState: Record<string, { pending: Set<string>; timer: number | null; running: boolean }> = {};
 const socialRatingListeners = new Set<(payload: { channel: string; login: string; score: number; swag_score?: number; social_score?: number }) => void>();
 const badgeGrantListeners = new Set<(payload: { channel: string }) => void>();
+const STARTUP_SCAN_DELAYS_MS = [0, 100, 300, 700, 1500, 3000];
 
 let currentChannelName: string | null = null;
 let socket: ReturnType<NonNullable<typeof io>> | null = null;
 let styleRafPending = false;
 let initialFetchSucceeded = false;
 let channelRefreshTimer: number | null = null;
+let startupScanTimer: number | null = null;
+let startupScanGeneration = 0;
+let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
 let lastVisibilityFetchTime = 0;
 
@@ -171,8 +175,8 @@ function collectVisibleLogins(): string[] {
   return Array.from(logins);
 }
 
-async function fetchBadges(channelName: string): Promise<void> {
-  const pending = collectVisibleLogins().filter((login) => {
+async function fetchBadges(channelName: string, logins = collectVisibleLogins()): Promise<void> {
+  const pending = logins.filter((login) => {
     const cached = viewerBadgeCache[viewerBadgeKey(channelName, login)];
     return !cached || cached.expiresAt <= Date.now();
   });
@@ -180,9 +184,52 @@ async function fetchBadges(channelName: string): Promise<void> {
   if (normalizeLogin(channelName) === currentChannelName) initialFetchSucceeded = true;
 }
 
+function reprocessVisibleChat(): void {
+  document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
+    delete (el as HTMLElement).dataset.tcbDone;
+    processSevenTVMessage(el, tributeContext);
+  });
+  document.querySelectorAll('.chat-line__message').forEach((el) => {
+    delete (el as HTMLElement).dataset.tcbDone;
+    processNativeMessage(el, tributeContext);
+  });
+}
+
+function stopStartupScan(): void {
+  startupScanGeneration += 1;
+  startupScanSeenLogins = new Set();
+  if (startupScanTimer) clearTimeout(startupScanTimer);
+  startupScanTimer = null;
+}
+
+function startStartupScan(channelName: string): void {
+  stopStartupScan();
+  const generation = startupScanGeneration;
+  let index = 0;
+
+  const scan = () => {
+    startupScanTimer = null;
+    if (generation !== startupScanGeneration || normalizeLogin(channelName) !== currentChannelName) return;
+
+    reprocessVisibleChat();
+    const logins = collectVisibleLogins();
+    const newLogins = logins.filter((login) => !startupScanSeenLogins.has(login));
+    for (const login of newLogins) startupScanSeenLogins.add(login);
+
+    if (newLogins.length > 0) void fetchBadges(channelName, newLogins);
+
+    index += 1;
+    if (index >= STARTUP_SCAN_DELAYS_MS.length) return;
+    startupScanTimer = window.setTimeout(scan, STARTUP_SCAN_DELAYS_MS[index]);
+  };
+
+  startupScanTimer = window.setTimeout(scan, STARTUP_SCAN_DELAYS_MS[index]);
+}
+
 function resetChannelState(clearCache = true): void {
   if (channelRefreshTimer) clearTimeout(channelRefreshTimer);
   channelRefreshTimer = null;
+  stopStartupScan();
   initialFetchSucceeded = false;
   if (socket) socket.disconnect();
   socket = null;
@@ -414,7 +461,7 @@ function checkUrlChange(): void {
   if (newChannel !== currentChannelName) {
     resetChannelState();
     currentChannelName = newChannel;
-    void fetchBadges(newChannel);
+    startStartupScan(newChannel);
     initSocket(newChannel);
   }
 }
@@ -433,17 +480,18 @@ function hookNavigation(): void {
   window.addEventListener('popstate', checkUrlChange);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !currentChannelName) return;
+    reprocessVisibleChat();
     const now = Date.now();
     if (now - lastVisibilityFetchTime < 30_000) return;
     lastVisibilityFetchTime = now;
-    void fetchBadges(currentChannelName);
+    startStartupScan(currentChannelName);
   });
 }
 
 export function startTributeBadgesContent(): void {
   currentChannelName = extractChannelName();
   if (currentChannelName) {
-    void fetchBadges(currentChannelName);
+    startStartupScan(currentChannelName);
     initSocket(currentChannelName);
   }
   startObserver();
