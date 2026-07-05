@@ -175,11 +175,15 @@ function collectVisibleLogins(): string[] {
   return Array.from(logins);
 }
 
-async function fetchBadges(channelName: string, logins = collectVisibleLogins()): Promise<void> {
+async function fetchBadges(channelName: string, logins = collectVisibleLogins(), forceRefresh = false): Promise<void> {
   const pending = logins.filter((login) => {
+    if (forceRefresh) return true;
     const cached = viewerBadgeCache[viewerBadgeKey(channelName, login)];
     return !cached || cached.expiresAt <= Date.now();
   });
+  if (forceRefresh) {
+    for (const login of pending) invalidateViewerBadgeCache(channelName, login);
+  }
   await Promise.all(pending.map((login) => resolveBadgesForLogin(channelName, login)));
   if (normalizeLogin(channelName) === currentChannelName) initialFetchSucceeded = true;
 }
@@ -202,7 +206,7 @@ function stopStartupScan(): void {
   startupScanTimer = null;
 }
 
-function startStartupScan(channelName: string): void {
+function startStartupScan(channelName: string, forceRefresh = false): void {
   stopStartupScan();
   const generation = startupScanGeneration;
   let index = 0;
@@ -216,7 +220,7 @@ function startStartupScan(channelName: string): void {
     const newLogins = logins.filter((login) => !startupScanSeenLogins.has(login));
     for (const login of newLogins) startupScanSeenLogins.add(login);
 
-    if (newLogins.length > 0) void fetchBadges(channelName, newLogins);
+    if (newLogins.length > 0) void fetchBadges(channelName, newLogins, forceRefresh);
 
     index += 1;
     if (index >= STARTUP_SCAN_DELAYS_MS.length) return;
@@ -484,7 +488,7 @@ function hookNavigation(): void {
     const now = Date.now();
     if (now - lastVisibilityFetchTime < 30_000) return;
     lastVisibilityFetchTime = now;
-    startStartupScan(currentChannelName);
+    startStartupScan(currentChannelName, true);
   });
 }
 

@@ -2,7 +2,7 @@ import { subscribeRealtimeChannel } from '../tribute-badges';
 
 const LOGIN_RE = /^[a-z0-9_]{3,25}$/;
 
-export type RatingUpdateCallback = (login: string, score: number) => void;
+export type RatingUpdateCallback = (login: string, score: number, socialScore?: number) => void;
 export type BadgeGrantsUpdateCallback = (channelLogin: string) => void;
 
 let activeChannel: string | null = null;
@@ -38,7 +38,7 @@ export function connectWebSocket(
     onSocialRatingUpdate: (data) => {
       if (activeChannel !== normalizedChannel || !onUpdateCb) return;
       if (data.channel !== normalizedChannel || !isValidLogin(data.login) || !isValidScore(data.score)) return;
-      onUpdateCb(data.login, data.score);
+      onUpdateCb(data.login, data.score, isValidScore(data.social_score) ? data.social_score : undefined);
     },
     onBadgeGrantsUpdated: (data) => {
       if (activeChannel !== normalizedChannel || !onBadgeGrantsUpdateCb) return;

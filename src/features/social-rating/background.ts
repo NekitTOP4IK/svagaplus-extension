@@ -168,10 +168,10 @@ function ratingCacheKey(channelLogin: string, login: string): string {
   return `${channelLogin.trim().toLowerCase()}:${login.trim().toLowerCase()}`;
 }
 
-function setRatingCache(channelLogin: string, login: string, score: number): void {
+function setRatingCache(channelLogin: string, login: string, score: number, socialScore = 0): void {
   ratingCache.set(ratingCacheKey(channelLogin, login), {
     expiresAt: Date.now() + RATING_CACHE_TTL_MS,
-    value: { login: login.toLowerCase(), score, swag_score: score, social_score: 0, isLowRating: score < 0 },
+    value: { login: login.toLowerCase(), score, swag_score: score, social_score: socialScore, isLowRating: score < 0 },
   });
 }
 
@@ -325,7 +325,7 @@ export async function castVote(
   login: string,
   channelLogin: string,
   value: 1 | -1,
-): Promise<{ ok: boolean; score?: number; error?: string; nextVoteAt?: number }> {
+): Promise<{ ok: boolean; score?: number; social_score?: number; error?: string; nextVoteAt?: number }> {
   debug('shared', 'castVote login=', login, 'channel=', channelLogin, 'value=', value);
   try {
     const url = `${API_V3_SOCIAL_CHANNELS_PATH}/${encodeURIComponent(channelLogin)}/votes`;
@@ -348,8 +348,14 @@ export async function castVote(
     }
     const data = unwrapApiData<any>(await res.json());
     const score = Number(data.swag_score ?? data.score);
-    if (Number.isSafeInteger(score)) setRatingCache(channelLogin, login, score);
-    return { ok: true, score, nextVoteAt: data.next_vote_at };
+    const socialScore = Number(data.social_score ?? 0);
+    if (Number.isSafeInteger(score)) setRatingCache(channelLogin, login, score, Number.isSafeInteger(socialScore) ? socialScore : 0);
+    return {
+      ok: true,
+      score,
+      social_score: Number.isSafeInteger(socialScore) ? socialScore : undefined,
+      nextVoteAt: data.next_vote_at,
+    };
   } catch (e) {
     error('shared', 'castVote error:', e);
     return { ok: false, error: 'network_error' };

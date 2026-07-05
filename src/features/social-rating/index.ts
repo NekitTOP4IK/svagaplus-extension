@@ -311,7 +311,7 @@ function initWebSocket(): void {
   if (!channel) return;
   connectWebSocket(
     channel,
-    (login, score) => updateBadgeScore(login, score),
+    (login, score, socialScore) => updateBadgeScore(login, score, socialScore),
     (updatedChannel) => scheduleBadgeGrantsRefresh(updatedChannel),
   );
 }

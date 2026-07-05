@@ -701,7 +701,7 @@ export async function injectBadge(
 
 // ── Live update from WebSocket ────────────────────────────────────────────────
 
-export function updateBadgeScore(login: string, score: number): void {
+export function updateBadgeScore(login: string, score: number, socialScore?: number): void {
   const wrap = document.querySelector<HTMLElement>(`[${BADGE_ATTR}="${CSS.escape(login)}"]`);
   if (!wrap) return;
 
@@ -714,8 +714,8 @@ export function updateBadgeScore(login: string, score: number): void {
 
   const scoreEl = wrap.querySelector<HTMLElement>(`[${SCORE_ATTR}]`);
   if (scoreEl) {
-    const socialScore = readStoredScore(scoreEl, SOCIAL_SCORE_ATTR, readVisibleSocialScore(scoreEl));
-    renderDualScore(scoreEl, score, socialScore);
+    const nextSocialScore = socialScore ?? readStoredScore(scoreEl, SOCIAL_SCORE_ATTR, readVisibleSocialScore(scoreEl));
+    renderDualScore(scoreEl, score, nextSocialScore);
   }
 
   const labelEl = wrap.querySelector<HTMLElement>(`[${LABEL_ATTR}]`);
