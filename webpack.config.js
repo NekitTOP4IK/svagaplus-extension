@@ -4,9 +4,9 @@ const CopyPlugin = require('copy-webpack-plugin');
 const { version } = require('./package.json');
 
 const DEFAULTS = {
-  BACKEND_URL_PROD: 'https://svagaplus.nekittop4ik.qzz.io',
+  BACKEND_URL_PROD: 'https://svagaplus.qzz.io',
   BACKEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
-  FRONTEND_URL_PROD: 'https://svagaplus.nekittop4ik.qzz.io',
+  FRONTEND_URL_PROD: 'https://svagaplus.qzz.io',
   FRONTEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
 };
 
