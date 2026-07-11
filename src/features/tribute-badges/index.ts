@@ -1,12 +1,15 @@
 import { BACKEND_URL } from '../../shared/config';
+import browser from '../../shared/browser';
 import { fetchChannelBadges, normalizeViewerBadges } from './api';
 import { normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
 import { processUserCard } from './usercard';
+import { clearBadgeRenderState, getBadgeRenderState } from './render-state';
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
+const TRIBUTE_NAME_SELECTORS = '.chat-author__display-name, .message-author__display-name, .chatter-name';
 
 declare const io: undefined | ((url: string, options: Record<string, unknown>) => {
   emit(event: string, payload?: unknown): void;
@@ -22,7 +25,11 @@ interface CacheEntry {
 const cachedUsers: Record<string, ViewerConfig> = {};
 const fontPresets: Record<string, FontPreset> = {};
 const viewerBadgeCache: Record<string, CacheEntry> = {};
-const viewerBadgeInflight: Record<string, { promise: Promise<Badge[]>; resolve: (badges: Badge[]) => void }> = {};
+const viewerBadgeInflight: Record<string, {
+  promise: Promise<Badge[]>;
+  resolve: (badges: Badge[]) => void;
+  reject: (error: Error) => void;
+}> = {};
 const viewerBadgeBatchState: Record<string, { pending: Set<string>; timer: number | null; running: boolean }> = {};
 const socialRatingListeners = new Set<(payload: { channel: string; login: string; score: number; swag_score?: number; social_score?: number }) => void>();
 const badgeGrantListeners = new Set<(payload: { channel: string }) => void>();
@@ -39,13 +46,20 @@ let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
 let lastVisibilityFetchTime = 0;
 
+const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
+
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
   styleRafPending = true;
-  requestAnimationFrame(() => {
+  const run = () => {
     styleRafPending = false;
     updateDynamicStyles(cachedUsers, fontPresets, BACKEND_URL);
-  });
+  };
+  if (document.hidden) {
+    setTimeout(run, 100);
+  } else {
+    requestAnimationFrame(run);
+  }
 }
 
 function viewerBadgeKey(channelName: string, login: string): string {
@@ -59,7 +73,7 @@ function getBatchState(channelName: string) {
 }
 
 function cacheViewerBadges(channelName: string, login: string, badges: Badge[]): void {
-  viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + 60_000, badges };
+  viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + VIEWER_BADGE_CACHE_TTL_MS, badges };
   console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
 }
 
@@ -80,7 +94,12 @@ function invalidateViewerBadgeCache(channelName: string, login?: string): void {
   const channelPrefix = `${normalizeLogin(channelName)}:`;
   if (!login) {
     for (const key of Object.keys(viewerBadgeCache)) if (key.startsWith(channelPrefix)) delete viewerBadgeCache[key];
-    for (const key of Object.keys(viewerBadgeInflight)) if (key.startsWith(channelPrefix)) delete viewerBadgeInflight[key];
+    for (const key of Object.keys(viewerBadgeInflight)) {
+      if (key.startsWith(channelPrefix)) {
+        viewerBadgeInflight[key]?.reject(new Error('cache invalidated'));
+        delete viewerBadgeInflight[key];
+      }
+    }
     const state = viewerBadgeBatchState[normalizeLogin(channelName)];
     if (state) {
       state.pending.clear();
@@ -91,6 +110,7 @@ function invalidateViewerBadgeCache(channelName: string, login?: string): void {
     return;
   }
   delete viewerBadgeCache[viewerBadgeKey(channelName, login)];
+  viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.reject(new Error('cache invalidated'));
   delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
 }
 
@@ -107,6 +127,7 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
 
   try {
     const payload = await fetchChannelBadges(channelName, logins);
+    if (!payload) throw new Error('FETCH_CHANNEL_BADGES failed');
     if (payload.font_presets) Object.assign(fontPresets, payload.font_presets);
     for (const login of logins) {
       const viewer = payload.viewers?.[login] || payload.viewers?.[normalizeLogin(login)] || null;
@@ -120,40 +141,61 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
     for (const login of logins) {
-      viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + 60_000, badges: [] };
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve([]);
+      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.reject(new Error('badge fetch failed'));
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
     }
   } finally {
     state.running = false;
     if (state.pending.size > 0 && !state.timer) {
-      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), 80);
+      const delay = document.hidden ? 300 : 80;
+      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), delay);
     }
   }
 }
 
-function resolveBadgesForLogin(channelName: string | null, login: string): Promise<Badge[]> {
+function resolveBadgesForLogin(channelName: string | null, login: string, force = false): Promise<Badge[]> {
   const normalizedChannel = normalizeLogin(channelName);
   const normalizedLoginValue = normalizeLogin(login);
   if (!normalizedChannel || !normalizedLoginValue) return Promise.resolve([]);
 
   const key = viewerBadgeKey(normalizedChannel, normalizedLoginValue);
   const cached = viewerBadgeCache[key];
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > Date.now() && !force) {
     console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
     return Promise.resolve(cached.badges);
   }
+  if (force) {
+    delete viewerBadgeCache[key];
+    viewerBadgeInflight[key]?.reject(new Error('force'));
+    delete viewerBadgeInflight[key];
+    // For force, direct fetch to bypass batch debounce
+    return fetchChannelBadges(normalizedChannel, [normalizedLoginValue], true).then(payload => {
+      if (!payload) return [];
+      const badges = normalizeViewerBadges(payload, normalizedLoginValue);
+      const viewer = payload.viewers?.[normalizedLoginValue] || null;
+      cacheViewerStyle(normalizedLoginValue, viewer as any);
+      cacheViewerBadges(normalizedChannel, normalizedLoginValue, badges);
+      refreshUserInChat(normalizedLoginValue);
+      return badges;
+    }).catch(() => []);
+  }
+
   const inflight = viewerBadgeInflight[key];
   if (inflight) return inflight.promise;
 
   let resolve!: (badges: Badge[]) => void;
-  const promise = new Promise<Badge[]>((done) => { resolve = done; });
-  viewerBadgeInflight[key] = { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<Badge[]>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  viewerBadgeInflight[key] = { promise, resolve, reject };
   const state = getBatchState(normalizedChannel);
   state.pending.add(normalizedLoginValue);
   console.debug(LOG_PREFIX, 'queue viewer', { channel: normalizedChannel, login: normalizedLoginValue, pending: state.pending.size });
   if (!state.running && !state.timer) {
-    state.timer = window.setTimeout(() => void flushViewerBadgeBatch(normalizedChannel), 80);
+    const delay = document.hidden ? 300 : 80;
+    state.timer = window.setTimeout(() => void flushViewerBadgeBatch(normalizedChannel), delay);
   }
   return promise;
 }
@@ -166,7 +208,7 @@ const tributeContext = {
 
 function collectVisibleLogins(): string[] {
   const logins = new Set<string>();
-  document.querySelectorAll('.chat-line__message .chat-author__display-name, .seventv-user-message .seventv-chat-user-username').forEach((el) => {
+  document.querySelectorAll(`.chat-line__message ${TRIBUTE_NAME_SELECTORS}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
     const raw = (el.textContent || '').replace(/^@/, '').trim();
     const match = raw.match(/\(([^)]+)\)\s*$/);
     const login = normalizeLogin(match ? match[1] : raw);
@@ -182,19 +224,26 @@ async function fetchBadges(channelName: string, logins = collectVisibleLogins(),
     return !cached || cached.expiresAt <= Date.now();
   });
   if (forceRefresh) {
-    for (const login of pending) invalidateViewerBadgeCache(channelName, login);
+    for (const login of pending) {
+      invalidateViewerBadgeCache(channelName, login);
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+    }
   }
-  await Promise.all(pending.map((login) => resolveBadgesForLogin(channelName, login)));
+  try {
+    await Promise.all(pending.map((login) => resolveBadgesForLogin(channelName, login, forceRefresh)));
+  } catch {
+    console.warn(LOG_PREFIX, 'fetchBadges batch rejected', { channelName, logins: pending });
+  }
   if (normalizeLogin(channelName) === currentChannelName) initialFetchSucceeded = true;
 }
 
 function reprocessVisibleChat(): void {
   document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
-    delete (el as HTMLElement).dataset.tcbDone;
+    clearBadgeRenderState(el as HTMLElement);
     processSevenTVMessage(el, tributeContext);
   });
   document.querySelectorAll('.chat-line__message').forEach((el) => {
-    delete (el as HTMLElement).dataset.tcbDone;
+    clearBadgeRenderState(el as HTMLElement);
     processNativeMessage(el, tributeContext);
   });
 }
@@ -311,6 +360,7 @@ function initSocket(channelName: string): void {
     if (msg.type === 'channel_refresh') {
       console.info(LOG_PREFIX, 'channel refresh', { channelName });
       invalidateViewerBadgeCache(channelName);
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
       if (channelRefreshTimer) return;
       channelRefreshTimer = window.setTimeout(() => {
         channelRefreshTimer = null;
@@ -340,13 +390,17 @@ function initSocket(channelName: string): void {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      // Keep background cache in sync so future content misses don't get stale 10min data
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
     } else {
       invalidateViewerBadgeCache(channelName, login);
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
     }
     scheduleDynamicStyles();
     refreshUserInChat(login);
@@ -413,16 +467,45 @@ function getTwitchLogin(): string | null {
 
 function refreshUserInChat(username: string): void {
   const safe = username.replace(/(["\\])/g, '\\$1');
+  const normalized = normalizeLogin(username);
+
   document.querySelectorAll(`[data-tcb-user="${safe}"]`).forEach((userBlock) => {
     const msg = userBlock.closest<HTMLElement>('.seventv-message, .seventv-user-message');
     if (msg) {
-      delete msg.dataset.tcbDone;
+      clearBadgeRenderState(msg);
       processSevenTVMessage(msg, tributeContext);
     }
   });
   document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
     if (element.querySelector(`.chat-author__display-name[data-tcb-user="${safe}"]`)) {
-      delete element.dataset.tcbDone;
+      clearBadgeRenderState(element);
+      processNativeMessage(element, tributeContext);
+    }
+  });
+
+  // Also search messages without our data attr (first badge / previously empty).
+  document.querySelectorAll<HTMLElement>('.seventv-user-message, .seventv-message').forEach((el) => {
+    const nameEl = el.querySelector<HTMLElement>('.seventv-chat-user-username');
+    if (!nameEl) return;
+    const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
+    const intlMatch = raw.match(/\((\w+)\)\s*$/);
+    const login = normalizeLogin(intlMatch ? intlMatch[1] : raw);
+    if (login === normalized) {
+      clearBadgeRenderState(el);
+      processSevenTVMessage(el, tributeContext);
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
+    const nameEl = element.querySelector<HTMLElement>(TRIBUTE_NAME_SELECTORS);
+    if (!nameEl) return;
+    const login = normalizeLogin(
+      nameEl.getAttribute('data-a-user') ||
+      nameEl.parentElement?.getAttribute('data-a-user') ||
+      nameEl.textContent
+    );
+    if (login === normalized) {
+      clearBadgeRenderState(element);
       processNativeMessage(element, tributeContext);
     }
   });
@@ -439,14 +522,75 @@ function processAddedNode(node: Node): void {
   node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => processUserCard(el, tributeContext));
 }
 
+const repairQueue = new Set<HTMLElement>();
+let repairRaf: number | null = null;
+
+function scheduleMessageRepair(message: HTMLElement): void {
+  repairQueue.add(message);
+  if (repairRaf !== null) return;
+
+  const runner = () => {
+    repairRaf = null;
+    const items = Array.from(repairQueue);
+    repairQueue.clear();
+    for (const item of items) {
+      if (!item.isConnected) continue;
+      clearBadgeRenderState(item);
+      processSevenTVMessage(item, tributeContext);
+      processNativeMessage(item, tributeContext);
+    }
+  };
+
+  // Use setTimeout in hidden tabs because RAF is throttled/paused.
+  if (document.hidden) {
+    repairRaf = window.setTimeout(runner, 50) as any;
+  } else {
+    repairRaf = requestAnimationFrame(runner) as any;
+  }
+}
+
+function maybeRepairRemovedTributeBadge(mutation: MutationRecord): void {
+  if (!(mutation.target instanceof Element)) return;
+  const removedOwnBadge = Array.from(mutation.removedNodes).some((node) => {
+    if (!(node instanceof Element)) return false;
+    return node.classList.contains('tcb-badge-img') ||
+      node.classList.contains('tcb-badge-list') ||
+      node.classList.contains('tcb-badge-list-stv') ||
+      node.querySelector('.tcb-badge-img, .tcb-badge-list, .tcb-badge-list-stv') != null;
+  });
+  const targetIsBadgeContainer = mutation.target.classList.contains('chat-line__message--badges') ||
+    mutation.target.classList.contains('seventv-chat-user-badge-list') ||
+    !!mutation.target.closest('.chat-line__message--badges, .seventv-chat-user-badge-list');
+  if (!removedOwnBadge && !targetIsBadgeContainer) return;
+  const message = mutation.target.closest<HTMLElement>('.chat-line__message, .seventv-message, .seventv-user-message');
+  if (!message) return;
+  const state = getBadgeRenderState(message);
+  if (state === 'pending' || state === 'empty') return;
+  if (message.querySelector('.tcb-badge-img, .tcb-badge-list, .tcb-badge-list-stv') != null) return;
+  scheduleMessageRepair(message);
+}
+
+function maybeRepairChangedUsername(mutation: MutationRecord): void {
+  const parent = mutation.target instanceof Text ? mutation.target.parentElement : mutation.target instanceof Element ? mutation.target : null;
+  if (!parent) return;
+  const name = parent.closest('.chat-author__display-name, .seventv-chat-user-username');
+  if (!name) return;
+  const message = name.closest<HTMLElement>('.chat-line__message, .seventv-message, .seventv-user-message');
+  if (message) scheduleMessageRepair(message);
+}
+
 function startObserver(): void {
   if (!document.body) {
     window.setTimeout(startObserver, 100);
     return;
   }
   new MutationObserver((mutations) => {
-    for (const mutation of mutations) mutation.addedNodes.forEach(processAddedNode);
-  }).observe(document.body, { childList: true, subtree: true });
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach(processAddedNode);
+      if (mutation.type === 'childList') maybeRepairRemovedTributeBadge(mutation);
+      if (mutation.type === 'characterData' || mutation.type === 'childList') maybeRepairChangedUsername(mutation);
+    }
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
   document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => processSevenTVMessage(el, tributeContext));
   document.querySelectorAll('.chat-line__message').forEach((el) => processNativeMessage(el, tributeContext));
@@ -488,6 +632,16 @@ function hookNavigation(): void {
     const now = Date.now();
     if (now - lastVisibilityFetchTime < 30_000) return;
     lastVisibilityFetchTime = now;
+    // With 10min per-chatter cache, on return from background we want to give visible messages
+    // a chance to pick up any missed WS updates. Startup scan with force will re-resolve.
+    // Additionally, for visible logins we proactively clear their content cache entry
+    // so resolve will go through (bg may still serve if not invalidated, but combined with WS sync it's better).
+    try {
+      const visible = collectVisibleLogins();
+      for (const login of visible) {
+        delete viewerBadgeCache[viewerBadgeKey(currentChannelName, login)];
+      }
+    } catch {}
     startStartupScan(currentChannelName, true);
   });
 }

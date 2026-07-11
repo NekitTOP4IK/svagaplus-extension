@@ -11,7 +11,8 @@ const API_V3_CHANNELS_PATH = '/api/v3' + CHANNELS_PATH;
 const API_V3_SOCIAL_CHANNELS_PATH = '/api/v3/social' + CHANNELS_PATH;
 const API_TIMEOUT_MS = 8_000;
 const RATING_CACHE_TTL_MS = 30_000;
-const BADGE_GRANTS_CACHE_TTL_MS = 60_000;
+const BADGE_GRANTS_CACHE_TTL_MS = 10 * 60 * 1000;
+const CHANNEL_GRANTS_TTL_MS = 10 * 60 * 1000;
 
 export interface StoredAuth {
   accessToken?: string;
@@ -31,7 +32,6 @@ const ratingInflight = new Map<string, Promise<CardRating | null>>();
 const badgeGrantCache = new Map<string, { expiresAt: number; value: ActiveBadgeGrant[] }>();
 const badgeGrantInflight = new Map<string, Promise<ActiveBadgeGrant[]>>();
 
-const CHANNEL_GRANTS_TTL_MS = 120_000; // 2 min
 const channelGrantsMap = new Map<string, { expiresAt: number; byLogin: Map<string, ActiveBadgeGrant[]> }>();
 const channelGrantsInflight = new Map<string, Promise<void>>();
 const channelGrantBatches = new Map<string, {
@@ -381,8 +381,9 @@ export async function fetchBadgeGrants(
       if (!res.ok) {
         if (res.status === 404) {
           badgeGrantCache.set(key, { expiresAt: Date.now() + BADGE_GRANTS_CACHE_TTL_MS, value: [] });
+          return [];
         }
-        return [];
+        throw new Error(`badge grants failed: ${res.status}`);
       }
       const payload = unwrapApiData<any>(await res.json());
       const grantsByLogin = normalizeChannelBadgeGrants(payload, normalizedLogins);
@@ -408,7 +409,7 @@ export async function fetchBadgeGrants(
       return grants;
     } catch (e) {
       error('shared', 'fetchBadgeGrants error:', e);
-      return [];
+      throw e;
     } finally {
       badgeGrantInflight.delete(key);
     }
@@ -422,6 +423,27 @@ export async function prefetchChannelBadgeGrants(channelLogin: string): Promise<
   const channelKey = channelLogin.trim().toLowerCase();
   const cached = channelGrantsMap.get(channelKey);
   if (cached && cached.expiresAt > Date.now()) return;
+  if (channelGrantsInflight.has(channelKey)) return channelGrantsInflight.get(channelKey);
+
+  const request = (async () => {
+    try {
+      const res = await apiFetch(`${API_V3_CHANNELS_PATH}/${encodeURIComponent(channelKey)}/badges`);
+      if (!res.ok) return;
+      const payload = unwrapApiData<any>(await res.json());
+      const viewers = payload?.viewers && typeof payload.viewers === 'object' ? Object.keys(payload.viewers) : [];
+      if (viewers.length === 0) return;
+      const grantsByLogin = normalizeChannelBadgeGrants(payload, viewers);
+      channelGrantsMap.set(channelKey, {
+        expiresAt: Date.now() + CHANNEL_GRANTS_TTL_MS,
+        byLogin: grantsByLogin,
+      });
+    } finally {
+      channelGrantsInflight.delete(channelKey);
+    }
+  })();
+
+  channelGrantsInflight.set(channelKey, request);
+  return request;
 }
 
 export function getChannelGrantsForLogin(channelLogin: string, login: string): ActiveBadgeGrant[] {
@@ -456,9 +478,12 @@ export async function getOrFetchChannelGrantsForLogin(
       batch.timer = setTimeout(() => {
         batch.timer = null;
         flushChannelGrantBatch(channelKey).catch(() => {
-          const failedWaiters = batch.waiters.get(normalizedLogin) ?? [];
-          batch.waiters.delete(normalizedLogin);
-          for (const waiter of failedWaiters) waiter([]);
+          const failedLogins = Array.from(batch.waiters.keys());
+          for (const failedLogin of failedLogins) {
+            const failedWaiters = batch.waiters.get(failedLogin) ?? [];
+            batch.waiters.delete(failedLogin);
+            for (const waiter of failedWaiters) waiter([]);
+          }
         });
       }, 80);
     }

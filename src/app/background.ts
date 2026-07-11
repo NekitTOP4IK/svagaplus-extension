@@ -55,7 +55,7 @@ type ViewerConnectResponse =
 const LOGIN_RE = /^[a-z0-9_]{3,25}$/;
 const MAX_ALIAS_LENGTH = 64;
 const MAX_IMPORT_ALIASES = 1000;
-const CHANNEL_BADGES_CACHE_TTL_MS = 15_000;
+const CHANNEL_BADGES_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type ChannelBadgeViewerEntry = {
   expiresAt: number;
@@ -108,33 +108,51 @@ function getCachedChannelBadges(channelLogin: string, logins: string[]): Channel
   const badges: Record<string, unknown> = {};
   const font_presets: Record<string, unknown> = {};
   const viewers: Record<string, unknown> = {};
+  let allFresh = true;
 
   for (const login of logins) {
     const viewer = channelBadgeViewersCache.get(channelViewerKey(channelLogin, login));
-    if (!viewer || viewer.expiresAt <= now) return null;
+    if (!viewer || viewer.expiresAt <= now) {
+      allFresh = false;
+      continue;
+    }
     const badgeIds = Array.isArray(viewer.data.badge_ids)
       ? viewer.data.badge_ids
         .map((badgeId) => (typeof badgeId === 'string' || typeof badgeId === 'number' ? String(badgeId) : ''))
         .filter(Boolean)
       : [];
 
+    let viewerAssetsFresh = true;
     for (const badgeId of badgeIds) {
       const badge = channelBadgeAssetsCache.get(badgeId);
-      if (!badge || badge.expiresAt <= now) return null;
+      if (!badge || badge.expiresAt <= now) {
+        viewerAssetsFresh = false;
+        break;
+      }
       badges[badgeId] = badge.data;
+    }
+    if (!viewerAssetsFresh) {
+      allFresh = false;
+      continue;
     }
 
     const fontPresetId = viewer.data.font_preset_id;
     const fontPresetKey = typeof fontPresetId === 'string' || typeof fontPresetId === 'number' ? String(fontPresetId) : '';
     if (fontPresetKey) {
       const fontPreset = channelBadgeFontPresetsCache.get(fontPresetKey);
-      if (!fontPreset || fontPreset.expiresAt <= now) return null;
+      if (!fontPreset || fontPreset.expiresAt <= now) {
+        allFresh = false;
+        continue;
+      }
       font_presets[fontPresetKey] = fontPreset.data;
     }
 
     viewers[login] = viewer.data;
   }
 
+  if (Object.keys(viewers).length === 0) return null;
+  // If not all were fresh we still return what we have; upper layer will fetch missing individually.
+  // This improves per-chatter cache behavior with the new 10min TTL.
   return { ok: true, badges, font_presets, viewers };
 }
 
@@ -214,14 +232,23 @@ async function fetchImageAsDataUrl(url: string): Promise<{ dataUrl: string | nul
   }
 }
 
-async function fetchChannelBadges(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
+async function fetchChannelBadges(channelLogin: string, logins: string[], force = false): Promise<ChannelBadgesResponse> {
   const normalizedLogins = uniqueSortedLogins(logins);
   if (normalizedLogins.length === 0) return { ok: true, badges: {}, font_presets: {}, viewers: {} };
 
+  if (force) {
+    // Force path from visibility/startup: bypass and clean
+    for (const login of normalizedLogins) {
+      const key = channelViewerKey(channelLogin, login);
+      channelBadgeViewersCache.delete(key);
+    }
+  }
+
   const cached = getCachedChannelBadges(channelLogin, normalizedLogins);
-  if (cached) return cached;
+  if (cached && !force) return cached;
 
   const missing = normalizedLogins.filter((login) => {
+    if (force) return true;
     const viewer = getCachedChannelBadges(channelLogin, [login]);
     return !viewer;
   });
@@ -497,6 +524,7 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
     case 'FETCH_CHANNEL_BADGES': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
       const loginsValue = (message as { logins?: unknown }).logins;
+      const force = !!(message as { force?: unknown }).force;
       if (!channelLogin || !Array.isArray(loginsValue) || loginsValue.length > 100) return badRequest();
 
       const logins: string[] = [];
@@ -506,7 +534,24 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         logins.push(login);
       }
 
-      return fetchChannelBadges(channelLogin, logins);
+      return fetchChannelBadges(channelLogin, logins, force);
+    }
+    case 'INVALIDATE_TRIBUTE_BADGE_CACHE': {
+      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
+      const login = normalizeLogin((message as { login?: unknown }).login);
+      if (!channelLogin) return badRequest();
+      // Remove specific or whole channel from the three Maps
+      const prefix = `${channelLogin}:`;
+      if (login) {
+        const key = `${channelLogin}:${login}`;
+        channelBadgeViewersCache.delete(key);
+      } else {
+        for (const k of Array.from(channelBadgeViewersCache.keys())) {
+          if (k.startsWith(prefix)) channelBadgeViewersCache.delete(k);
+        }
+      }
+      // Note: we don't aggressively clear asset/font caches here (they are shared), but viewer data drives usage.
+      return { ok: true };
     }
     case 'PREFETCH_CHANNEL_BADGE_GRANTS': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);

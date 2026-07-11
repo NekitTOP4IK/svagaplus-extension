@@ -1,5 +1,12 @@
 import { createBadgeImg, dedupeBadges, normalizeLogin } from './dom';
 import type { Badge, ViewerConfig } from './types';
+import {
+  beginBadgeRender,
+  failBadgeRender,
+  finishBadgeRender,
+  isCurrentBadgeRender,
+  shouldSkipBadgeRender,
+} from './render-state';
 
 export interface UserCardContext {
   getCurrentChannel(): string | null;
@@ -29,41 +36,72 @@ function resolveCardLogin(cardEl: HTMLElement, targetNameEl: HTMLElement | null,
   return normalizeLogin(intlMatch ? intlMatch[1] : rawText);
 }
 
+const USERCARD_NAME_SELECTOR = '.seventv-chat-user-username, .seventv-user-card-username, .tw-title, [data-a-target="user-card-header-username"], .viewer-card-header__display-name';
+
+function findCardNameEl(cardEl: HTMLElement): HTMLElement | null {
+  const specific = cardEl.querySelector<HTMLElement>(USERCARD_NAME_SELECTOR);
+  if (specific) return specific;
+  return Array.from(cardEl.querySelectorAll<HTMLElement>('span, h4, h2, h3, div')).find((el) => /^[a-zA-Z0-9_]{3,25}$/.test(el.textContent?.trim() || '')) ?? null;
+}
+
 export function processUserCard(card: Element, context: UserCardContext): void {
   const cardEl = card as HTMLElement;
-  if (cardEl.dataset.tcbDone) return;
 
-  const specificNameEl = cardEl.querySelector<HTMLElement>('.seventv-chat-user-username, .seventv-user-card-username, .tw-title, [data-a-target="user-card-header-username"], .viewer-card-header__display-name');
-  const fallbackNameEl = Array.from(cardEl.querySelectorAll<HTMLElement>('span, h4, h2, h3, div')).find((el) => /^[a-zA-Z0-9_]{3,25}$/.test(el.textContent?.trim() || ''));
-  const targetNameEl = specificNameEl || fallbackNameEl || null;
+  const targetNameEl = findCardNameEl(cardEl);
   const rawText = targetNameEl?.textContent?.trim() || cardEl.textContent?.match(/([a-zA-Z0-9_]{3,25})/)?.[1] || '';
   if (!rawText) return;
 
   const username = resolveCardLogin(cardEl, targetNameEl, rawText);
   if (!username) return;
-  cardEl.dataset.tcbDone = '1';
-  const renderToken = String((Number(cardEl.dataset.tcbRenderToken || '0') || 0) + 1);
-  cardEl.dataset.tcbRenderToken = renderToken;
 
-  void context.resolveBadgesForLogin(context.getCurrentChannel(), username).then((badges) => {
-    if (cardEl.dataset.tcbRenderToken !== renderToken) return;
-    const uniqueBadges = dedupeBadges(badges);
-    if (uniqueBadges.length === 0) return;
-    const sevTVBadgeContainer = cardEl.querySelector<HTMLElement>('.seventv-user-card-badges');
-    const badgeContainer = sevTVBadgeContainer || targetNameEl?.parentElement;
-    if (!badgeContainer) return;
-    badgeContainer.querySelectorAll('.tcb-badge-list').forEach((badge) => badge.remove());
-    const wrapper = document.createElement('span');
-    wrapper.className = 'tcb-badge-list tcb-badge-list--usercard';
-    uniqueBadges.forEach((badge) => {
-      const img = createBadgeImg(badge);
-      if (img) wrapper.appendChild(img);
-    });
-    if (wrapper.children.length > 0) {
-      if (sevTVBadgeContainer) sevTVBadgeContainer.appendChild(wrapper);
-      else targetNameEl?.insertAdjacentElement('beforebegin', wrapper);
+  if (shouldSkipBadgeRender(cardEl, username)) return;
+
+  const renderToken = beginBadgeRender(cardEl, username);
+
+  void (async () => {
+    try {
+      const badges = await context.resolveBadgesForLogin(context.getCurrentChannel(), username);
+      if (!isCurrentBadgeRender(cardEl, username, renderToken)) return;
+      if (!cardEl.isConnected) {
+        failBadgeRender(cardEl, username, renderToken);
+        return;
+      }
+
+      const currentTargetNameEl = findCardNameEl(cardEl);
+      if (!currentTargetNameEl) {
+        failBadgeRender(cardEl, username, renderToken);
+        return;
+      }
+
+      const uniqueBadges = dedupeBadges(badges);
+      const sevTVBadgeContainer = cardEl.querySelector<HTMLElement>('.seventv-user-card-badges');
+      const badgeContainer = sevTVBadgeContainer || currentTargetNameEl.parentElement;
+      if (!badgeContainer) {
+        failBadgeRender(cardEl, username, renderToken);
+        return;
+      }
+      badgeContainer.querySelectorAll('.tcb-badge-list').forEach((badge) => badge.remove());
+
+      if (uniqueBadges.length === 0) {
+        finishBadgeRender(cardEl, username, false);
+        return;
+      }
+
+      const wrapper = document.createElement('span');
+      wrapper.className = 'tcb-badge-list tcb-badge-list--usercard';
+      uniqueBadges.forEach((badge) => {
+        const img = createBadgeImg(badge);
+        if (img) wrapper.appendChild(img);
+      });
+      if (wrapper.children.length > 0) {
+        if (sevTVBadgeContainer) sevTVBadgeContainer.appendChild(wrapper);
+        else currentTargetNameEl.insertAdjacentElement('beforebegin', wrapper);
+      }
+      finishBadgeRender(cardEl, username, wrapper.children.length > 0);
+    } catch {
+      failBadgeRender(cardEl, username, renderToken);
     }
-  });
+  })();
 
   const config = context.getCachedUser(username);
   if (targetNameEl && config?.name_gradient) {

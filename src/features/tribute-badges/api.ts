@@ -87,24 +87,33 @@ export function normalizeViewerBadges(payload: V3ChannelBadgesPayload | V3Viewer
   return normalized;
 }
 
-export async function fetchChannelBadges(channel: string, logins: string[]): Promise<V3ChannelBadgesPayload> {
+export async function fetchChannelBadges(channel: string, logins: string[], force = false): Promise<V3ChannelBadgesPayload | null> {
   if (!channel || logins.length === 0) return { badges: {}, font_presets: {}, viewers: {} };
-  console.debug(LOG_PREFIX, 'request batch', { channel, logins });
-  const response = await browser.runtime.sendMessage({
-    type: 'FETCH_CHANNEL_BADGES',
-    channelLogin: channel,
-    logins,
-  }) as { ok?: boolean; badges?: Record<string, V3BadgePayload>; font_presets?: Record<string, V3FontPresetPayload>; viewers?: Record<string, V3ViewerPayload> } | null;
-  const payload = response?.ok ? {
-    badges: response.badges || {},
-    font_presets: response.font_presets || {},
-    viewers: response.viewers || {},
-  } : { badges: {}, font_presets: {}, viewers: {} };
-  console.debug(LOG_PREFIX, 'batch response', {
-    channel,
-    viewers: Object.keys(payload.viewers || {}),
-    badges: Object.keys(payload.badges || {}),
-    fontPresets: Object.keys(payload.font_presets || {}),
-  });
-  return payload;
+  console.debug(LOG_PREFIX, 'request batch', { channel, logins, force });
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'FETCH_CHANNEL_BADGES',
+      channelLogin: channel,
+      logins,
+      force,
+    }) as { ok?: boolean; badges?: Record<string, V3BadgePayload>; font_presets?: Record<string, V3FontPresetPayload>; viewers?: Record<string, V3ViewerPayload> } | null;
+
+    if (!response?.ok) return null;
+
+    const payload = {
+      badges: response.badges || {},
+      font_presets: response.font_presets || {},
+      viewers: response.viewers || {},
+    };
+    console.debug(LOG_PREFIX, 'batch response', {
+      channel,
+      viewers: Object.keys(payload.viewers || {}),
+      badges: Object.keys(payload.badges || {}),
+      fontPresets: Object.keys(payload.font_presets || {}),
+    });
+    return payload;
+  } catch (error) {
+    console.warn(LOG_PREFIX, 'batch request failed', { channel, logins, error });
+    return null;
+  }
 }
