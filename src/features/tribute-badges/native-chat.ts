@@ -42,9 +42,11 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
     try {
       const badges = await context.resolveBadgesForLogin(context.getCurrentChannel(), username);
 
+      if (element.isConnected && !isCurrentBadgeRender(element, username, renderToken)) return;
+
       // Fallback to current live message for same login if original element was recycled.
       let targetElement: HTMLElement = element;
-      if (!isCurrentBadgeRender(element, username, renderToken) || !element.isConnected) {
+      if (!element.isConnected) {
         const candidates = document.querySelectorAll<HTMLElement>('.chat-line__message');
         for (const cand of Array.from(candidates)) {
           const nameEl = cand.querySelector<HTMLElement>('.chat-author__display-name, .message-author__display-name, .chatter-name');

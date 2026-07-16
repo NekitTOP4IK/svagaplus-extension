@@ -47,6 +47,7 @@ let lastUrl = location.href;
 let lastVisibilityFetchTime = 0;
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -141,7 +142,12 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
     for (const login of logins) {
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.reject(new Error('badge fetch failed'));
+      // Soft-fail: empty cache for 30s to avoid chat flood. Background cooldown is primary control.
+      viewerBadgeCache[viewerBadgeKey(channelName, login)] = {
+        expiresAt: Date.now() + VIEWER_BADGE_FAIL_CACHE_TTL_MS,
+        badges: [],
+      };
+      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve([]);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
     }
   } finally {

@@ -31,6 +31,7 @@ import {
   setAlias,
   syncAliasesWithServer,
 } from '../features/social-rating/background';
+import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -97,6 +98,14 @@ function badRequest(): Promise<{ ok: false; error: 'bad_request' }> {
 
 function channelViewerKey(channelLogin: string, login: string): string {
   return `${channelLogin}:${login}`;
+}
+
+function emptyChannelBadgesResponse(logins: string[]): ChannelBadgesResponse {
+  const viewers: Record<string, unknown> = {};
+  for (const login of logins) {
+    viewers[login] = { badge_ids: [] };
+  }
+  return { ok: true, badges: {}, font_presets: {}, viewers };
 }
 
 function uniqueSortedLogins(logins: string[]): string[] {
@@ -184,6 +193,11 @@ function cacheChannelBadges(channelLogin: string, response: ChannelBadgesRespons
 }
 
 async function fetchChannelBadgesFromBackend(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
+  const coolKey = channelBadgesKey(channelLogin);
+  if (apiCooldown.isBlocked(coolKey)) {
+    return emptyChannelBadgesResponse(logins);
+  }
+
   const requestKey = `${channelLogin}:${logins.join(',')}`;
   const inflight = channelBadgeInflight.get(requestKey);
   if (inflight) return inflight;
@@ -192,7 +206,15 @@ async function fetchChannelBadgesFromBackend(channelLogin: string, logins: strin
     try {
       const params = new URLSearchParams({ viewers: logins.join(',') });
       const res = await fetch(`${BACKEND_URL}/api/v3/channels/${encodeURIComponent(channelLogin)}/badges?${params.toString()}`);
-      if (!res.ok) return { ok: false, badges: {}, font_presets: {}, viewers: {} };
+      if (!res.ok) {
+        apiCooldown.markFromStatus(coolKey, res.status);
+        const empty = emptyChannelBadgesResponse(logins);
+        // cacheChannelBadges only stores when ok:true — empty has ok:true
+        if (res.status === 404) {
+          cacheChannelBadges(channelLogin, empty);
+        }
+        return empty;
+      }
       const payload = await res.json();
       const data = payload?.data ?? payload;
       const response = {
@@ -204,7 +226,8 @@ async function fetchChannelBadgesFromBackend(channelLogin: string, logins: strin
       cacheChannelBadges(channelLogin, response);
       return response;
     } catch {
-      return { ok: false, badges: {}, font_presets: {}, viewers: {} };
+      apiCooldown.markFromStatus(coolKey, 'network');
+      return emptyChannelBadgesResponse(logins);
     } finally {
       channelBadgeInflight.delete(requestKey);
     }
@@ -550,8 +573,9 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
           if (k.startsWith(prefix)) channelBadgeViewersCache.delete(k);
         }
       }
+      apiCooldown.clear(channelBadgesKey(channelLogin));
       // Note: we don't aggressively clear asset/font caches here (they are shared), but viewer data drives usage.
-      return { ok: true };
+      return Promise.resolve({ ok: true });
     }
     case 'PREFETCH_CHANNEL_BADGE_GRANTS': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);

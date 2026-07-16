@@ -137,6 +137,33 @@ function refreshOpenCardAliases(): void {
   });
 }
 
+function scheduleSocialBadgeRepair(target: Element, channelLogin: string): void {
+  const message = target.closest<Element>('.chat-line__message, .seventv-user-message');
+  if (!message) return;
+  const done = message.getAttribute('data-tsr-chat-badges-done');
+  if (done && done.endsWith(':pending')) return;
+  if (done && !done.endsWith(':pending') && message.querySelector('.tsr-chat-badge-img, .tsr-chat-badge-list, .tsr-chat-badge-list-7tv') != null) return;
+  message.removeAttribute('data-tsr-chat-badges-done');
+  requestAnimationFrame(() => {
+    if (!message.isConnected) return;
+    if (message.classList.contains('seventv-user-message')) {
+      void processSevenTVChatBadges(message, channelLogin);
+      return;
+    }
+    void processNativeChatBadges(message, channelLogin);
+  });
+}
+
+function mutationRemovedSocialBadge(mutation: MutationRecord): boolean {
+  return Array.from(mutation.removedNodes).some((node) => {
+    if (!(node instanceof Element)) return false;
+    return node.classList.contains('tsr-chat-badge-img') ||
+      node.classList.contains('tsr-chat-badge-list') ||
+      node.classList.contains('tsr-chat-badge-list-7tv') ||
+      node.querySelector('.tsr-chat-badge-img, .tsr-chat-badge-list, .tsr-chat-badge-list-7tv') != null;
+  });
+}
+
 function observe(): void {
   const chatLinesToReapply = new Set<Element>();
   const cardsToReapply = new Set<Element>();
@@ -213,6 +240,9 @@ function observe(): void {
       }
 
       if (mutation.type === 'childList' && mutation.target instanceof Element) {
+        if (mutationRemovedSocialBadge(mutation)) {
+          scheduleSocialBadgeRepair(mutation.target, getCurrentChannel());
+        }
         if (isAliasOwnedMutation(mutation.target)) continue;
 
         const card = mutation.target.closest(CARD_REAPPLY_SELECTOR);

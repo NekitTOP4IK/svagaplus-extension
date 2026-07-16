@@ -233,8 +233,8 @@ export async function processSevenTVChatBadges(messageElement: Element, channelL
   try {
     const grants = await grantsResolver(channelLogin, login);
 
-    if (!targetMessage.isConnected) {
-      targetMessage.removeAttribute(DONE_ATTR);
+    if (!messageElement.isConnected) {
+      messageElement.removeAttribute(DONE_ATTR);
       return;
     }
     const currentUserBlock = messageElement.querySelector<HTMLElement>('.seventv-chat-user');
