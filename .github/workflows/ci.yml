@@ -1,21 +1,135 @@
-name: CI
+name: CI/CD
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  version-check:
+  test:
+    name: Test and build
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check manifest versions match
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test request cooldowns
+        run: npm run test:cooldown
+
+      - name: Test DOM stability
+        run: npm run test:dom
+
+      - name: Test popup error banner
+        run: node test/popup-error-banner.test.js
+
+      - name: Test Firefox manifest
+        run: node test/firefox-manifest.test.js
+
+      - name: Build Chrome
+        run: npm run build
+
+      - name: Verify built versions
         run: |
-          V1=$(node -p "require('./manifest.json').version")
-          V2=$(node -p "require('./manifest.firefox.json').version")
-          if [ "$V1" != "$V2" ]; then
-            echo "❌ Version mismatch: manifest.json=$V1, manifest.firefox.json=$V2"
-            exit 1
+          node <<'NODE'
+          const fs = require('fs');
+          const expected = require('./package.json').version;
+          for (const file of ['dist_chrome/manifest.json', 'dist_firefox/manifest.json']) {
+            const actual = JSON.parse(fs.readFileSync(file, 'utf8')).version;
+            if (actual !== expected) {
+              throw new Error(`${file}: expected version ${expected}, got ${actual}`);
+            }
+          }
+          NODE
+
+  release:
+    name: Release browser archives
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${TAG} already exists; nothing to publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "✅ Versions match: $V1"
+
+      - name: Install dependencies
+        if: steps.version.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build production archives
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npm run build:prod
+          npm run build:prod:firefox
+          (cd dist_firefox && zip -rq "../artifacts/svagaplus-extension-firefox-v${VERSION}.zip" .)
+
+      - name: Verify release archives
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CHROME="artifacts/svagaplus-extension-chrome-v${VERSION}.zip"
+          FIREFOX="artifacts/svagaplus-extension-firefox-v${VERSION}.zip"
+          test -s "$CHROME"
+          test -s "$FIREFOX"
+          unzip -t "$CHROME"
+          unzip -t "$FIREFOX"
+          unzip -Z1 "$CHROME" | grep -Fx manifest.json
+          unzip -Z1 "$FIREFOX" | grep -Fx manifest.json
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            "artifacts/svagaplus-extension-chrome-v${VERSION}.zip" \
+            "artifacts/svagaplus-extension-firefox-v${VERSION}.zip" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes

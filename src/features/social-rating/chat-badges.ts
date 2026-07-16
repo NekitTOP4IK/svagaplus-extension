@@ -127,6 +127,14 @@ async function grantsFor(channelLogin: string, login: string): Promise<ActiveBad
   return getChannelGrantsForLogin(channelLogin, login);
 }
 
+let grantsResolver: typeof grantsFor = grantsFor;
+
+export function __testOnlySetGrantsFor(next: typeof grantsFor): () => void {
+  const prev = grantsResolver;
+  grantsResolver = next;
+  return () => { grantsResolver = prev; };
+}
+
 function renderBadges(container: Element, grants: ActiveBadgeGrant[], as7tv = false): void {
   container.querySelectorAll(`.${BADGE_CLASS}`).forEach((el) => el.remove());
   const images = grants.map(createBadgeImg).filter((img): img is HTMLImageElement => img !== null);
@@ -151,23 +159,59 @@ export async function processNativeChatBadges(messageElement: Element, channelLo
   if (!login) return;
 
   if (messageElement.getAttribute(DONE_ATTR) === login) return;
-  messageElement.setAttribute(DONE_ATTR, login);
+  messageElement.setAttribute(DONE_ATTR, `${login}:pending`);
   usernameElement.setAttribute(USER_ATTR, login);
 
-  const grants = await grantsFor(channelLogin, login);
-  const badgesContainer = messageElement.querySelector('.chat-line__message--badges');
-  if (badgesContainer) {
-    renderBadges(badgesContainer, grants);
-    return;
-  }
+  try {
+    const grants = await grantsResolver(channelLogin, login);
 
-  messageElement.querySelectorAll(`.${LIST_CLASS}`).forEach((el) => el.remove());
-  if (grants.length === 0) return;
-  const wrapper = document.createElement('span');
-  wrapper.className = LIST_CLASS;
-  renderBadges(wrapper, grants);
-  const insertTarget = usernameElement.closest('.chat-line__username') || usernameElement;
-  insertTarget.insertAdjacentElement('beforebegin', wrapper);
+    let targetMessage: Element = messageElement;
+    if (!messageElement.isConnected) {
+      const candidates = document.querySelectorAll<HTMLElement>('.chat-line__message');
+      for (const cand of Array.from(candidates)) {
+        if (cand.isConnected) {
+          const candLogin = normalizeLogin(
+            cand.getAttribute('data-a-user') ||
+            cand.querySelector<HTMLElement>('.chat-author__display-name, .message-author__display-name, .chatter-name')?.textContent
+          );
+          if (candLogin === login) {
+            targetMessage = cand;
+            break;
+          }
+        }
+      }
+    }
+    if (!targetMessage.isConnected) {
+      messageElement.removeAttribute(DONE_ATTR);
+      return;
+    }
+    const currentUsernameElement = targetMessage.querySelector<HTMLElement>('.chat-author__display-name, .message-author__display-name, .chatter-name');
+    if (!currentUsernameElement) {
+      messageElement.removeAttribute(DONE_ATTR);
+      return;
+    }
+
+    const badgesContainer = targetMessage.querySelector('.chat-line__message--badges');
+    if (badgesContainer) {
+      renderBadges(badgesContainer, grants);
+      messageElement.setAttribute(DONE_ATTR, login);
+      return;
+    }
+
+    targetMessage.querySelectorAll(`.${LIST_CLASS}`).forEach((el) => el.remove());
+    if (grants.length === 0) {
+      messageElement.setAttribute(DONE_ATTR, login);
+      return;
+    }
+    const wrapper = document.createElement('span');
+    wrapper.className = LIST_CLASS;
+    renderBadges(wrapper, grants);
+    const insertTarget = currentUsernameElement.closest('.chat-line__username') || currentUsernameElement;
+    insertTarget.insertAdjacentElement('beforebegin', wrapper);
+    messageElement.setAttribute(DONE_ATTR, login);
+  } catch {
+    messageElement.removeAttribute(DONE_ATTR);
+  }
 }
 
 export async function processSevenTVChatBadges(messageElement: Element, channelLogin: string): Promise<void> {
@@ -183,27 +227,48 @@ export async function processSevenTVChatBadges(messageElement: Element, channelL
   if (!login) return;
 
   if (messageElement.getAttribute(DONE_ATTR) === login) return;
-  messageElement.setAttribute(DONE_ATTR, login);
+  messageElement.setAttribute(DONE_ATTR, `${login}:pending`);
   userBlock.setAttribute(USER_ATTR, login);
 
-  const grants = await grantsFor(channelLogin, login);
-  userBlock.querySelectorAll(`.${BADGE_CLASS}, .${LIST_7TV_CLASS}`).forEach((el) => el.remove());
-  if (grants.length === 0) return;
+  try {
+    const grants = await grantsResolver(channelLogin, login);
 
-  let badgeList = userBlock.querySelector('.seventv-chat-user-badge-list');
-  if (!badgeList) {
-    badgeList = document.createElement('span');
-    badgeList.className = LIST_7TV_CLASS;
-    usernameElement.insertAdjacentElement('beforebegin', badgeList);
+    if (!messageElement.isConnected) {
+      messageElement.removeAttribute(DONE_ATTR);
+      return;
+    }
+    const currentUserBlock = messageElement.querySelector<HTMLElement>('.seventv-chat-user');
+    const currentUsernameElement = messageElement.querySelector<HTMLElement>('.seventv-chat-user-username');
+    if (!currentUserBlock || !currentUsernameElement) {
+      messageElement.removeAttribute(DONE_ATTR);
+      return;
+    }
+
+    currentUserBlock.querySelectorAll(`.${BADGE_CLASS}, .${LIST_7TV_CLASS}`).forEach((el) => el.remove());
+    if (grants.length === 0) {
+      messageElement.setAttribute(DONE_ATTR, login);
+      return;
+    }
+
+    let badgeList = currentUserBlock.querySelector<HTMLElement>('.seventv-chat-user-badge-list');
+    if (!badgeList) {
+      badgeList = document.createElement('span');
+      badgeList.className = LIST_7TV_CLASS;
+      currentUsernameElement.insertAdjacentElement('beforebegin', badgeList);
+    }
+    renderBadges(badgeList, grants, true);
+    messageElement.setAttribute(DONE_ATTR, login);
+  } catch {
+    messageElement.removeAttribute(DONE_ATTR);
   }
-  renderBadges(badgeList, grants, true);
 }
 
 export async function processUserCardAwardBadges(cardElement: Element, login: string, channelLogin: string): Promise<void> {
   ensureReady();
   const normalizedLogin = normalizeLogin(login);
   if (!normalizedLogin) return;
-  const grants = await grantsFor(channelLogin, normalizedLogin);
+  const grants = await grantsResolver(channelLogin, normalizedLogin);
+  if (!cardElement.isConnected) return;
 
   cardElement.querySelectorAll(`.${LIST_CLASS}--usercard`).forEach((el) => el.remove());
   if (grants.length === 0) return;
