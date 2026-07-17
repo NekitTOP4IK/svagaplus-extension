@@ -172,18 +172,6 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   }
   if (force) {
     delete viewerBadgeCache[key];
-    viewerBadgeInflight[key]?.reject(new Error('force'));
-    delete viewerBadgeInflight[key];
-    // For force, direct fetch to bypass batch debounce
-    return fetchChannelBadges(normalizedChannel, [normalizedLoginValue], true).then(payload => {
-      if (!payload) return [];
-      const badges = normalizeViewerBadges(payload, normalizedLoginValue);
-      const viewer = payload.viewers?.[normalizedLoginValue] || null;
-      cacheViewerStyle(normalizedLoginValue, viewer as any);
-      cacheViewerBadges(normalizedChannel, normalizedLoginValue, badges);
-      refreshUserInChat(normalizedLoginValue);
-      return badges;
-    }).catch(() => []);
   }
 
   const inflight = viewerBadgeInflight[key];
