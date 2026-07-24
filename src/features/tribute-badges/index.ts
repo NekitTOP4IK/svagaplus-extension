@@ -140,7 +140,7 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      refreshUserInChat(login);
+      // Do NOT refreshUserInChat here — pending process* IIFEs attach; WS handles data changes.
     }
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
