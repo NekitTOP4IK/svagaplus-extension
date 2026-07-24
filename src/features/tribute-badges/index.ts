@@ -5,7 +5,7 @@ import { normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
 import { processUserCard } from './usercard';
-import { clearBadgeRenderState, getBadgeRenderState } from './render-state';
+import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } from './render-state';
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
@@ -44,10 +44,13 @@ let startupScanTimer: number | null = null;
 let startupScanGeneration = 0;
 let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
-let lastVisibilityFetchTime = 0;
+let lastVisibilityRecoveryAt = 0;
+let softReprocessGeneration = 0;
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
+const VISIBILITY_RECOVERY_DEBOUNCE_MS = 5_000;
+const REPROCESS_CHUNK_SIZE = 32;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -240,6 +243,70 @@ function reprocessVisibleChat(): void {
     clearBadgeRenderState(el as HTMLElement);
     processNativeMessage(el, tributeContext);
   });
+}
+
+function softReprocessVisibleChat(): void {
+  const generation = ++softReprocessGeneration;
+  const messages: HTMLElement[] = [
+    ...Array.from(document.querySelectorAll<HTMLElement>('.seventv-message, .seventv-user-message')),
+    ...Array.from(document.querySelectorAll<HTMLElement>('.chat-line__message')),
+  ];
+
+  let index = 0;
+  const pump = () => {
+    if (generation !== softReprocessGeneration || document.hidden) return;
+    const end = Math.min(index + REPROCESS_CHUNK_SIZE, messages.length);
+    for (; index < end; index++) {
+      const el = messages[index];
+      if (!el.isConnected) continue;
+
+      // Soft path: skip healthy messages; re-render empty only if content cache now has badges.
+      if (getBadgeRenderState(el) === 'empty') {
+        const login = el.dataset.tcbUserLogin;
+        if (login && currentChannelName) {
+          const cached = viewerBadgeCache[viewerBadgeKey(currentChannelName, login)];
+          if (!(cached && cached.badges.length > 0 && cached.expiresAt > Date.now())) {
+            continue;
+          }
+          // fall through to clear + process
+        } else {
+          continue;
+        }
+      } else if (isTributeMessageHealthy(el)) {
+        continue;
+      }
+
+      clearBadgeRenderState(el);
+      if (el.classList.contains('chat-line__message')) {
+        processNativeMessage(el, tributeContext);
+      } else {
+        processSevenTVMessage(el, tributeContext);
+      }
+    }
+    if (index < messages.length) {
+      requestAnimationFrame(pump);
+    }
+  };
+  requestAnimationFrame(pump);
+}
+
+function onVisibilityRecover(): void {
+  if (!currentChannelName || document.hidden) return;
+  const now = Date.now();
+  if (now - lastVisibilityRecoveryAt < VISIBILITY_RECOVERY_DEBOUNCE_MS) return;
+  lastVisibilityRecoveryAt = now;
+
+  softReprocessVisibleChat();
+
+  const channelName = currentChannelName;
+  const logins = collectVisibleLogins();
+  const missingOrStale = logins.filter((login) => {
+    const cached = viewerBadgeCache[viewerBadgeKey(channelName, login)];
+    return !cached || cached.expiresAt <= Date.now();
+  });
+  if (missingOrStale.length > 0) {
+    void fetchBadges(channelName, missingOrStale, false);
+  }
 }
 
 function stopStartupScan(): void {
@@ -622,21 +689,7 @@ function hookNavigation(): void {
   window.addEventListener('popstate', checkUrlChange);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !currentChannelName) return;
-    reprocessVisibleChat();
-    const now = Date.now();
-    if (now - lastVisibilityFetchTime < 30_000) return;
-    lastVisibilityFetchTime = now;
-    // With 10min per-chatter cache, on return from background we want to give visible messages
-    // a chance to pick up any missed WS updates. Startup scan with force will re-resolve.
-    // Additionally, for visible logins we proactively clear their content cache entry
-    // so resolve will go through (bg may still serve if not invalidated, but combined with WS sync it's better).
-    try {
-      const visible = collectVisibleLogins();
-      for (const login of visible) {
-        delete viewerBadgeCache[viewerBadgeKey(currentChannelName, login)];
-      }
-    } catch {}
-    startStartupScan(currentChannelName, true);
+    onVisibilityRecover();
   });
 }
 
