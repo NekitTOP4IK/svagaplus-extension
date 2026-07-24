@@ -325,7 +325,9 @@ function startStartupScan(channelName: string, forceRefresh = false): void {
     startupScanTimer = null;
     if (generation !== startupScanGeneration || normalizeLogin(channelName) !== currentChannelName) return;
 
-    reprocessVisibleChat();
+    // Soft only — do not clear healthy rendered messages on every delay tick.
+    softReprocessVisibleChat();
+
     const logins = collectVisibleLogins();
     const newLogins = logins.filter((login) => !startupScanSeenLogins.has(login));
     for (const login of newLogins) startupScanSeenLogins.add(login);
