@@ -142,12 +142,10 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      // Do NOT refreshUserInChat here — pending process* IIFEs attach; WS handles data changes.
     }
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
     for (const login of logins) {
-      // Soft-fail: empty cache for 30s to avoid chat flood. Background cooldown is primary control.
       viewerBadgeCache[viewerBadgeKey(channelName, login)] = {
         expiresAt: Date.now() + VIEWER_BADGE_FAIL_CACHE_TTL_MS,
         badges: [],
@@ -262,7 +260,6 @@ function softReprocessVisibleChat(): void {
       const el = messages[index];
       if (!el.isConnected) continue;
 
-      // Soft path: skip healthy messages; re-render empty only if content cache now has badges.
       if (getBadgeRenderState(el) === 'empty') {
         const login = el.dataset.tcbUserLogin;
         if (login && currentChannelName) {
@@ -270,7 +267,6 @@ function softReprocessVisibleChat(): void {
           if (!(cached && cached.badges.length > 0 && cached.expiresAt > Date.now())) {
             continue;
           }
-          // fall through to clear + process
         } else {
           continue;
         }
@@ -313,7 +309,6 @@ function flushHiddenMessageQueue(): void {
   }
   if (toProcess.length === 0) return;
 
-  // Separate generation so soft reprocess does not cancel a pending flush (and vice versa).
   const generation = ++hiddenFlushGeneration;
   let index = 0;
   const pump = () => {
@@ -335,7 +330,6 @@ function flushHiddenMessageQueue(): void {
 function onVisibilityRecover(): void {
   if (!currentChannelName || document.hidden) return;
 
-  // Always drain the hidden queue first so enqueued lines are not lost to debounce.
   flushHiddenMessageQueue();
 
   const now = Date.now();
@@ -371,7 +365,6 @@ function startStartupScan(channelName: string, forceRefresh = false): void {
     startupScanTimer = null;
     if (generation !== startupScanGeneration || normalizeLogin(channelName) !== currentChannelName) return;
 
-    // Soft only — do not clear healthy rendered messages on every delay tick.
     softReprocessVisibleChat();
 
     const logins = collectVisibleLogins();
@@ -502,7 +495,6 @@ function initSocket(channelName: string): void {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      // Upsert background cache so future content misses use the live WS payload
       browser.runtime.sendMessage({
         type: 'UPSERT_TRIBUTE_BADGE_CACHE',
         channelLogin: channelName,
@@ -512,8 +504,6 @@ function initSocket(channelName: string): void {
         font_presets: msg.data.font_presets,
       }).catch(() => {});
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
-      // Content can normalize legacy tra/tsr into real badges, but BG cache only
-      // understands badge_ids+assets — UPSERTing badge_ids:[] would poison a warm empty viewer.
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
@@ -644,7 +634,6 @@ function processAddedNode(node: Node): void {
   if (node.classList.contains('chat-line__message')) {
     enqueueOrProcessMessage(node as HTMLElement, 'native');
   }
-  // Usercards process only when open / present — no need to queue while hidden.
   if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) {
     processUserCard(node, tributeContext);
   }
@@ -679,7 +668,6 @@ function scheduleMessageRepair(message: HTMLElement): void {
     }
   };
 
-  // Use setTimeout in hidden tabs because RAF is throttled/paused.
   if (document.hidden) {
     repairRaf = window.setTimeout(runner, 50) as any;
   } else {

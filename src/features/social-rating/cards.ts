@@ -425,10 +425,22 @@ function formatHttpError(error: string): string | null {
   return null;
 }
 
-function formatVoteError(error: string, nextVoteAt?: number): string {
-  if (error.includes('24 hours') || error === '429') {
-    const ts = nextVoteAt ? nextVoteAt * 1000 : Date.now() + 86400000;
-    return `Подожди! Следующее голосование ${formatNextVoteDate(ts)}`;
+function resolveNextVoteMs(nextVoteAtMs?: number): number {
+  if (typeof nextVoteAtMs === 'number' && Number.isFinite(nextVoteAtMs) && nextVoteAtMs > 0) {
+    return nextVoteAtMs;
+  }
+  return Date.now() + 86400000;
+}
+
+function isVoteCooldownError(error: string, nextVoteAtMs?: number): boolean {
+  if (typeof nextVoteAtMs === 'number' && Number.isFinite(nextVoteAtMs)) return true;
+  if (error === '429') return true;
+  return /cooldown|24\s*hours|rate.?limit/i.test(error);
+}
+
+function formatVoteError(error: string, nextVoteAtMs?: number): string {
+  if (isVoteCooldownError(error, nextVoteAtMs)) {
+    return `Подожди! Следующее голосование ${formatNextVoteDate(resolveNextVoteMs(nextVoteAtMs))}`;
   }
   if (error.includes('yourself')) return 'Нельзя голосовать за себя';
   if (error.includes('below zero')) return 'Твой рейтинг < 10 — голосование заблокировано';
@@ -662,7 +674,7 @@ export async function injectBadge(
         stripe.style.boxShadow = `4px 0 16px 4px ${newAccent}30,2px 0 6px 2px ${newAccent}50`;
         renderDualScore(scoreEl, ns, socialScore);
         setLabel(label, channelLogin, ns < 0);
-        const nextTs = res.nextVoteAt ? res.nextVoteAt * 1000 : Date.now() + 86400000;
+        const nextTs = resolveNextVoteMs(res.nextVoteAt);
         showToast(wrap, `Голос принят. Свагометр ${scoreText(ns)}. Следующее голосование ${formatNextVoteDate(nextTs)}`, 'ok');
       } else {
         const msg = formatVoteError(res.error ?? '', res.nextVoteAt);

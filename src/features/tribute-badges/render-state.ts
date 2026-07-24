@@ -48,12 +48,10 @@ export function clearBadgeRenderState(element: HTMLElement): void {
 
 export function isTributeMessageHealthy(element: HTMLElement): boolean {
   const state = getBadgeRenderState(element);
-  if (state === 'pending') return true; // in-flight; do not stomp
+  if (state === 'pending') return true;
   if (state === 'rendered') {
     return element.querySelector('.tcb-badge-img, .tcb-badge-list, .tcb-badge-list-stv') != null;
   }
-  // 'empty' is healthy only if we still have no badges expected — caller may override via cache.
-  // Soft visibility treats empty as skip; WS/login refresh will hard-clear.
   if (state === 'empty') return true;
   return false;
 }

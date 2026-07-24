@@ -160,8 +160,6 @@ function getCachedChannelBadges(channelLogin: string, logins: string[]): Channel
   }
 
   if (Object.keys(viewers).length === 0) return null;
-  // If not all were fresh we still return what we have; upper layer will fetch missing individually.
-  // This improves per-chatter cache behavior with the new 10min TTL.
   return { ok: true, badges, font_presets, viewers };
 }
 
@@ -292,7 +290,6 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
   if (normalizedLogins.length === 0) return { ok: true, badges: {}, font_presets: {}, viewers: {} };
 
   if (force) {
-    // Force path from visibility/startup: bypass and clean
     for (const login of normalizedLogins) {
       const key = channelViewerKey(channelLogin, login);
       channelBadgeViewersCache.delete(key);
@@ -606,7 +603,6 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         }
       }
       apiCooldown.clear(channelBadgesKey(channelLogin));
-      // Note: we don't aggressively clear asset/font caches here (they are shared), but viewer data drives usage.
       return Promise.resolve({ ok: true });
     }
     case 'UPSERT_TRIBUTE_BADGE_CACHE': {

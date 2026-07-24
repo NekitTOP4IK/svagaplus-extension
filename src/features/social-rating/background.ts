@@ -327,6 +327,52 @@ export async function fetchRatingForCard(
   return request;
 }
 
+export function parseNextVoteAtMs(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1e12 ? Math.round(value * 1000) : Math.round(value);
+  }
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const n = Number(trimmed);
+    if (!Number.isFinite(n)) return undefined;
+    return n < 1e12 ? Math.round(n * 1000) : Math.round(n);
+  }
+  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const ms = Date.parse(hasTz ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+export function extractVoteErrorPayload(
+  err: unknown,
+  status: number,
+): { error: string; nextVoteAt?: number } {
+  const body = err && typeof err === 'object' && !Array.isArray(err)
+    ? (err as Record<string, unknown>)
+    : {};
+  const detail = body.detail;
+  let message: string | undefined;
+  let rawNext: unknown;
+
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const d = detail as Record<string, unknown>;
+    if (typeof d.message === 'string') message = d.message;
+    else if (typeof d.msg === 'string') message = d.msg;
+    rawNext = d.next_vote_at;
+  } else if (typeof detail === 'string') {
+    message = detail;
+  }
+
+  if (!message && typeof body.message === 'string') message = body.message;
+  if (rawNext == null && body.next_vote_at != null) rawNext = body.next_vote_at;
+
+  return {
+    error: message ?? String(status),
+    nextVoteAt: parseNextVoteAtMs(rawNext),
+  };
+}
+
 export async function castVote(
   login: string,
   channelLogin: string,
@@ -346,11 +392,7 @@ export async function castVote(
     if (res.status === 401 && authInvalid) return { ok: false, error: 'not_authenticated' };
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      const detail = err.detail;
-      if (detail && typeof detail === 'object' && detail.next_vote_at) {
-        return { ok: false, error: detail.message ?? String(res.status), nextVoteAt: detail.next_vote_at };
-      }
-      return { ok: false, error: err.detail ?? String(res.status) };
+      return { ok: false, ...extractVoteErrorPayload(err, res.status) };
     }
     const data = unwrapApiData<any>(await res.json());
     const score = Number(data.swag_score ?? data.score);
@@ -360,7 +402,7 @@ export async function castVote(
       ok: true,
       score,
       social_score: Number.isSafeInteger(socialScore) ? socialScore : undefined,
-      nextVoteAt: data.next_vote_at,
+      nextVoteAt: parseNextVoteAtMs(data.next_vote_at),
     };
   } catch (e) {
     error('shared', 'castVote error:', e);
