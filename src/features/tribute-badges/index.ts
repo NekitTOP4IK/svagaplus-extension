@@ -46,6 +46,7 @@ let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
 let lastVisibilityRecoveryAt = 0;
 let softReprocessGeneration = 0;
+let hiddenFlushGeneration = 0;
 const hiddenMessageQueue = new Set<HTMLElement>();
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -303,13 +304,32 @@ function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): v
 function flushHiddenMessageQueue(): void {
   const items = Array.from(hiddenMessageQueue);
   hiddenMessageQueue.clear();
+  const toProcess: HTMLElement[] = [];
   for (const el of items) {
     if (!el.isConnected) continue;
     if (isTributeMessageHealthy(el)) continue;
     clearBadgeRenderState(el);
-    if (el.classList.contains('chat-line__message')) processNativeMessage(el, tributeContext);
-    else processSevenTVMessage(el, tributeContext);
+    toProcess.push(el);
   }
+  if (toProcess.length === 0) return;
+
+  // Separate generation so soft reprocess does not cancel a pending flush (and vice versa).
+  const generation = ++hiddenFlushGeneration;
+  let index = 0;
+  const pump = () => {
+    if (generation !== hiddenFlushGeneration || document.hidden) return;
+    const end = Math.min(index + REPROCESS_CHUNK_SIZE, toProcess.length);
+    for (; index < end; index++) {
+      const el = toProcess[index];
+      if (!el.isConnected) continue;
+      if (el.classList.contains('chat-line__message')) processNativeMessage(el, tributeContext);
+      else processSevenTVMessage(el, tributeContext);
+    }
+    if (index < toProcess.length) {
+      requestAnimationFrame(pump);
+    }
+  };
+  requestAnimationFrame(pump);
 }
 
 function onVisibilityRecover(): void {
@@ -378,6 +398,9 @@ function resetChannelState(clearCache = true): void {
   for (const key of Object.keys(cachedUsers)) delete cachedUsers[key];
   for (const key of Object.keys(fontPresets)) delete fontPresets[key];
   if (clearCache && currentChannelName) invalidateViewerBadgeCache(currentChannelName);
+  hiddenMessageQueue.clear();
+  softReprocessGeneration += 1;
+  hiddenFlushGeneration += 1;
   scheduleDynamicStyles();
 }
 
@@ -489,19 +512,16 @@ function initSocket(channelName: string): void {
         font_presets: msg.data.font_presets,
       }).catch(() => {});
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
+      // Content can normalize legacy tra/tsr into real badges, but BG cache only
+      // understands badge_ids+assets — UPSERTing badge_ids:[] would poison a warm empty viewer.
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
       browser.runtime.sendMessage({
-        type: 'UPSERT_TRIBUTE_BADGE_CACHE',
+        type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
         channelLogin: channelName,
         login,
-        viewer: {
-          badge_ids: [],
-          tra_badges: msg.data.tra_badges,
-          tsr_badges: msg.data.tsr_badges,
-        },
       }).catch(() => {});
     } else {
       invalidateViewerBadgeCache(channelName, login);

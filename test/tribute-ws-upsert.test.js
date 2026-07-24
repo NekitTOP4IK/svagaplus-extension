@@ -120,7 +120,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
 
   messages.length = 0;
 
-  // 2) legacy tra/tsr-only payload → UPSERT with constructed viewer
+  // 2) legacy tra/tsr-only payload → INVALIDATE BG (content still caches normalized badges)
   handlers.badge_update({
     type: 'user_update',
     data: {
@@ -132,12 +132,12 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   await wait(50);
 
   assert.ok(
-    messages.some((m) => m.type === 'UPSERT_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
-    'legacy tra/tsr payload must UPSERT',
+    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
+    'legacy tra/tsr payload must INVALIDATE BG cache',
   );
   assert.ok(
-    !messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
-    'legacy tra/tsr payload must not INVALIDATE bob',
+    !messages.some((m) => m.type === 'UPSERT_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
+    'legacy tra/tsr payload must not UPSERT (would poison with badge_ids:[])',
   );
 
   messages.length = 0;
