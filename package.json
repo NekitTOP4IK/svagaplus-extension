@@ -1,6 +1,6 @@
 {
   "name": "svagaplus-extension",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -13,7 +13,7 @@
     "watch:firefox": "webpack --watch --config webpack.config.js --env firefox",
     "typecheck": "tsc --noEmit",
     "test:cooldown": "tsc --module commonjs --moduleResolution node --outDir dist-types && node test/request-cooldown.test.js && node test/api-failure-cooldown.test.js",
-    "test:dom": "tsc --module commonjs --moduleResolution node --outDir dist-types && node test/tribute-dom-stability.test.js && node test/social-rating-dom-stability.test.js"
+    "test:dom": "tsc --module commonjs --moduleResolution node --outDir dist-types && node test/tribute-dom-stability.test.js && node test/social-rating-dom-stability.test.js && node test/tribute-force-batch.test.js && node test/tribute-batch-no-refresh-storm.test.js && node test/tribute-ws-upsert.test.js && node test/tribute-visibility-soft-reprocess.test.js"
   },
   "dependencies": {
     "webextension-polyfill": "^0.12.0"

@@ -293,14 +293,20 @@ export async function refreshVisibleChatBadges(channelLogin: string): Promise<vo
   ensureReady();
   const nativeMessages = Array.from(document.querySelectorAll('.chat-line__message'));
   const sevenTvMessages = Array.from(document.querySelectorAll('.seventv-user-message'));
+  const all = [...nativeMessages, ...sevenTvMessages];
+  const CHUNK = 32;
 
-  for (const message of nativeMessages) {
-    message.removeAttribute(DONE_ATTR);
-    await processNativeChatBadges(message, channelLogin);
-  }
-
-  for (const message of sevenTvMessages) {
-    message.removeAttribute(DONE_ATTR);
-    await processSevenTVChatBadges(message, channelLogin);
+  for (let i = 0; i < all.length; i += CHUNK) {
+    const slice = all.slice(i, i + CHUNK);
+    for (const message of slice) {
+      message.removeAttribute(DONE_ATTR);
+      if (message.classList.contains('seventv-user-message')) {
+        await processSevenTVChatBadges(message, channelLogin);
+      } else {
+        await processNativeChatBadges(message, channelLogin);
+      }
+    }
+    // Yield to the browser between chunks
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
 }

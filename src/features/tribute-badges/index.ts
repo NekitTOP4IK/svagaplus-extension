@@ -5,7 +5,7 @@ import { normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
 import { processUserCard } from './usercard';
-import { clearBadgeRenderState, getBadgeRenderState } from './render-state';
+import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } from './render-state';
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
@@ -44,10 +44,15 @@ let startupScanTimer: number | null = null;
 let startupScanGeneration = 0;
 let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
-let lastVisibilityFetchTime = 0;
+let lastVisibilityRecoveryAt = 0;
+let softReprocessGeneration = 0;
+let hiddenFlushGeneration = 0;
+const hiddenMessageQueue = new Set<HTMLElement>();
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
+const VISIBILITY_RECOVERY_DEBOUNCE_MS = 5_000;
+const REPROCESS_CHUNK_SIZE = 32;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -137,7 +142,7 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      refreshUserInChat(login);
+      // Do NOT refreshUserInChat here — pending process* IIFEs attach; WS handles data changes.
     }
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
@@ -172,18 +177,6 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   }
   if (force) {
     delete viewerBadgeCache[key];
-    viewerBadgeInflight[key]?.reject(new Error('force'));
-    delete viewerBadgeInflight[key];
-    // For force, direct fetch to bypass batch debounce
-    return fetchChannelBadges(normalizedChannel, [normalizedLoginValue], true).then(payload => {
-      if (!payload) return [];
-      const badges = normalizeViewerBadges(payload, normalizedLoginValue);
-      const viewer = payload.viewers?.[normalizedLoginValue] || null;
-      cacheViewerStyle(normalizedLoginValue, viewer as any);
-      cacheViewerBadges(normalizedChannel, normalizedLoginValue, badges);
-      refreshUserInChat(normalizedLoginValue);
-      return badges;
-    }).catch(() => []);
   }
 
   const inflight = viewerBadgeInflight[key];
@@ -254,6 +247,114 @@ function reprocessVisibleChat(): void {
   });
 }
 
+function softReprocessVisibleChat(): void {
+  const generation = ++softReprocessGeneration;
+  const messages: HTMLElement[] = [
+    ...Array.from(document.querySelectorAll<HTMLElement>('.seventv-message, .seventv-user-message')),
+    ...Array.from(document.querySelectorAll<HTMLElement>('.chat-line__message')),
+  ];
+
+  let index = 0;
+  const pump = () => {
+    if (generation !== softReprocessGeneration || document.hidden) return;
+    const end = Math.min(index + REPROCESS_CHUNK_SIZE, messages.length);
+    for (; index < end; index++) {
+      const el = messages[index];
+      if (!el.isConnected) continue;
+
+      // Soft path: skip healthy messages; re-render empty only if content cache now has badges.
+      if (getBadgeRenderState(el) === 'empty') {
+        const login = el.dataset.tcbUserLogin;
+        if (login && currentChannelName) {
+          const cached = viewerBadgeCache[viewerBadgeKey(currentChannelName, login)];
+          if (!(cached && cached.badges.length > 0 && cached.expiresAt > Date.now())) {
+            continue;
+          }
+          // fall through to clear + process
+        } else {
+          continue;
+        }
+      } else if (isTributeMessageHealthy(el)) {
+        continue;
+      }
+
+      clearBadgeRenderState(el);
+      if (el.classList.contains('chat-line__message')) {
+        processNativeMessage(el, tributeContext);
+      } else {
+        processSevenTVMessage(el, tributeContext);
+      }
+    }
+    if (index < messages.length) {
+      requestAnimationFrame(pump);
+    }
+  };
+  requestAnimationFrame(pump);
+}
+
+function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
+  if (document.hidden) {
+    hiddenMessageQueue.add(el);
+    return;
+  }
+  if (kind === 'native') processNativeMessage(el, tributeContext);
+  else processSevenTVMessage(el, tributeContext);
+}
+
+function flushHiddenMessageQueue(): void {
+  const items = Array.from(hiddenMessageQueue);
+  hiddenMessageQueue.clear();
+  const toProcess: HTMLElement[] = [];
+  for (const el of items) {
+    if (!el.isConnected) continue;
+    if (isTributeMessageHealthy(el)) continue;
+    clearBadgeRenderState(el);
+    toProcess.push(el);
+  }
+  if (toProcess.length === 0) return;
+
+  // Separate generation so soft reprocess does not cancel a pending flush (and vice versa).
+  const generation = ++hiddenFlushGeneration;
+  let index = 0;
+  const pump = () => {
+    if (generation !== hiddenFlushGeneration || document.hidden) return;
+    const end = Math.min(index + REPROCESS_CHUNK_SIZE, toProcess.length);
+    for (; index < end; index++) {
+      const el = toProcess[index];
+      if (!el.isConnected) continue;
+      if (el.classList.contains('chat-line__message')) processNativeMessage(el, tributeContext);
+      else processSevenTVMessage(el, tributeContext);
+    }
+    if (index < toProcess.length) {
+      requestAnimationFrame(pump);
+    }
+  };
+  requestAnimationFrame(pump);
+}
+
+function onVisibilityRecover(): void {
+  if (!currentChannelName || document.hidden) return;
+
+  // Always drain the hidden queue first so enqueued lines are not lost to debounce.
+  flushHiddenMessageQueue();
+
+  const now = Date.now();
+  if (now - lastVisibilityRecoveryAt < VISIBILITY_RECOVERY_DEBOUNCE_MS) return;
+  lastVisibilityRecoveryAt = now;
+
+  softReprocessVisibleChat();
+
+  const channelName = currentChannelName;
+  const logins = collectVisibleLogins();
+  const missingOrStale = logins.filter((login) => {
+    const cached = viewerBadgeCache[viewerBadgeKey(channelName, login)];
+    return !cached || cached.expiresAt <= Date.now();
+  });
+  if (missingOrStale.length > 0) {
+    void fetchBadges(channelName, missingOrStale, false);
+  }
+}
+
 function stopStartupScan(): void {
   startupScanGeneration += 1;
   startupScanSeenLogins = new Set();
@@ -270,7 +371,9 @@ function startStartupScan(channelName: string, forceRefresh = false): void {
     startupScanTimer = null;
     if (generation !== startupScanGeneration || normalizeLogin(channelName) !== currentChannelName) return;
 
-    reprocessVisibleChat();
+    // Soft only — do not clear healthy rendered messages on every delay tick.
+    softReprocessVisibleChat();
+
     const logins = collectVisibleLogins();
     const newLogins = logins.filter((login) => !startupScanSeenLogins.has(login));
     for (const login of newLogins) startupScanSeenLogins.add(login);
@@ -295,6 +398,9 @@ function resetChannelState(clearCache = true): void {
   for (const key of Object.keys(cachedUsers)) delete cachedUsers[key];
   for (const key of Object.keys(fontPresets)) delete fontPresets[key];
   if (clearCache && currentChannelName) invalidateViewerBadgeCache(currentChannelName);
+  hiddenMessageQueue.clear();
+  softReprocessGeneration += 1;
+  hiddenFlushGeneration += 1;
   scheduleDynamicStyles();
 }
 
@@ -396,14 +502,27 @@ function initSocket(channelName: string): void {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      // Keep background cache in sync so future content misses don't get stale 10min data
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      // Upsert background cache so future content misses use the live WS payload
+      browser.runtime.sendMessage({
+        type: 'UPSERT_TRIBUTE_BADGE_CACHE',
+        channelLogin: channelName,
+        login,
+        viewer: msg.data,
+        badges: msg.data.badges,
+        font_presets: msg.data.font_presets,
+      }).catch(() => {});
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
+      // Content can normalize legacy tra/tsr into real badges, but BG cache only
+      // understands badge_ids+assets — UPSERTing badge_ids:[] would poison a warm empty viewer.
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      browser.runtime.sendMessage({
+        type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
+        channelLogin: channelName,
+        login,
+      }).catch(() => {});
     } else {
       invalidateViewerBadgeCache(channelName, login);
       browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
@@ -519,13 +638,26 @@ function refreshUserInChat(username: string): void {
 
 function processAddedNode(node: Node): void {
   if (!(node instanceof Element)) return;
-  if (node.classList.contains('seventv-message') || node.classList.contains('seventv-user-message')) processSevenTVMessage(node, tributeContext);
-  if (node.classList.contains('chat-line__message')) processNativeMessage(node, tributeContext);
-  if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) processUserCard(node, tributeContext);
+  if (node.classList.contains('seventv-message') || node.classList.contains('seventv-user-message')) {
+    enqueueOrProcessMessage(node as HTMLElement, 'seventv');
+  }
+  if (node.classList.contains('chat-line__message')) {
+    enqueueOrProcessMessage(node as HTMLElement, 'native');
+  }
+  // Usercards process only when open / present — no need to queue while hidden.
+  if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) {
+    processUserCard(node, tributeContext);
+  }
 
-  node.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => processSevenTVMessage(el, tributeContext));
-  node.querySelectorAll('.chat-line__message').forEach((el) => processNativeMessage(el, tributeContext));
-  node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => processUserCard(el, tributeContext));
+  node.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
+    enqueueOrProcessMessage(el as HTMLElement, 'seventv');
+  });
+  node.querySelectorAll('.chat-line__message').forEach((el) => {
+    enqueueOrProcessMessage(el as HTMLElement, 'native');
+  });
+  node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => {
+    processUserCard(el, tributeContext);
+  });
 }
 
 const repairQueue = new Set<HTMLElement>();
@@ -634,21 +766,7 @@ function hookNavigation(): void {
   window.addEventListener('popstate', checkUrlChange);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !currentChannelName) return;
-    reprocessVisibleChat();
-    const now = Date.now();
-    if (now - lastVisibilityFetchTime < 30_000) return;
-    lastVisibilityFetchTime = now;
-    // With 10min per-chatter cache, on return from background we want to give visible messages
-    // a chance to pick up any missed WS updates. Startup scan with force will re-resolve.
-    // Additionally, for visible logins we proactively clear their content cache entry
-    // so resolve will go through (bg may still serve if not invalidated, but combined with WS sync it's better).
-    try {
-      const visible = collectVisibleLogins();
-      for (const login of visible) {
-        delete viewerBadgeCache[viewerBadgeKey(currentChannelName, login)];
-      }
-    } catch {}
-    startStartupScan(currentChannelName, true);
+    onVisibilityRecover();
   });
 }
 
