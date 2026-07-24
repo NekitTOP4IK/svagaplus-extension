@@ -26,9 +26,11 @@ function setupDom() {
   global.history = dom.window.history;
   global.requestAnimationFrame = (cb) => setTimeout(cb, 0);
   global.chrome = { runtime: { onMessage: { addListener: () => {} } } };
-  Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => documentHidden });
+  return dom;
 }
 
+let documentHidden = false;
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -48,9 +50,14 @@ require.cache[polyfillPath] = {
       sendMessage: async (message) => {
         messages.push(message);
         if (message?.type === 'FETCH_CHANNEL_BADGES') {
-          return { ok: true, badges: {}, font_presets: {}, viewers: {} };
+          const viewers = {};
+          for (const login of message.logins || []) {
+            viewers[login] = { badge_ids: [] };
+          }
+          return { ok: true, badges: {}, font_presets: {}, viewers };
         }
         if (message?.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE') return { ok: true };
+        if (message?.type === 'UPSERT_TRIBUTE_BADGE_CACHE') return { ok: true };
         return {};
       },
     },
@@ -58,23 +65,42 @@ require.cache[polyfillPath] = {
 };
 
 setupDom();
-
 const { startTributeBadgesContent } = require('../dist-types/features/tribute-badges/index.js');
 
 (async () => {
   startTributeBadgesContent();
-  await wait(120);
+  // Allow initial startup scan / first batch to settle.
+  await wait(400);
   messages.length = 0;
 
+  // Simulate tab hide → show with WARM content cache (no artificial wipe).
+  documentHidden = true;
   document.dispatchEvent(new window.Event('visibilitychange'));
-  await wait(120);
+  documentHidden = false;
+  document.dispatchEvent(new window.Event('visibilitychange'));
+  await wait(250);
 
-  const badgeRequests = messages.filter((message) => message?.type === 'FETCH_CHANNEL_BADGES');
-  assert.equal(badgeRequests.length, 1, `expected one forced batch request, got ${badgeRequests.length}`);
-  assert.deepEqual(badgeRequests[0].logins.sort(), ['alice', 'bob', 'carol']);
+  const badgeRequests = messages.filter((m) => m?.type === 'FETCH_CHANNEL_BADGES');
+  assert.equal(
+    badgeRequests.length,
+    0,
+    `warm cache: expected 0 FETCH_CHANNEL_BADGES on visibility, got ${badgeRequests.length}: ${JSON.stringify(badgeRequests)}`,
+  );
 
-  console.log('tribute-force-batch: PASS');
+  const invalidates = messages.filter((m) => m?.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE');
+  assert.equal(
+    invalidates.length,
+    0,
+    `warm cache: expected 0 INVALIDATE on visibility, got ${invalidates.length}`,
+  );
+
+  // Force-ish path: no request should carry force:true from visibility recovery.
+  for (const req of badgeRequests) {
+    assert.notEqual(req.force, true, 'visibility recovery must not set force:true');
+  }
+
+  console.log('tribute-force-batch (soft visibility): PASS');
 })().catch((error) => {
-  console.error('tribute-force-batch: FAIL', error);
+  console.error('tribute-force-batch (soft visibility): FAIL', error);
   process.exit(1);
 });
