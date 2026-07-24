@@ -46,6 +46,7 @@ let startupScanSeenLogins = new Set<string>();
 let lastUrl = location.href;
 let lastVisibilityRecoveryAt = 0;
 let softReprocessGeneration = 0;
+const hiddenMessageQueue = new Set<HTMLElement>();
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
@@ -290,8 +291,33 @@ function softReprocessVisibleChat(): void {
   requestAnimationFrame(pump);
 }
 
+function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
+  if (document.hidden) {
+    hiddenMessageQueue.add(el);
+    return;
+  }
+  if (kind === 'native') processNativeMessage(el, tributeContext);
+  else processSevenTVMessage(el, tributeContext);
+}
+
+function flushHiddenMessageQueue(): void {
+  const items = Array.from(hiddenMessageQueue);
+  hiddenMessageQueue.clear();
+  for (const el of items) {
+    if (!el.isConnected) continue;
+    if (isTributeMessageHealthy(el)) continue;
+    clearBadgeRenderState(el);
+    if (el.classList.contains('chat-line__message')) processNativeMessage(el, tributeContext);
+    else processSevenTVMessage(el, tributeContext);
+  }
+}
+
 function onVisibilityRecover(): void {
   if (!currentChannelName || document.hidden) return;
+
+  // Always drain the hidden queue first so enqueued lines are not lost to debounce.
+  flushHiddenMessageQueue();
+
   const now = Date.now();
   if (now - lastVisibilityRecoveryAt < VISIBILITY_RECOVERY_DEBOUNCE_MS) return;
   lastVisibilityRecoveryAt = now;
@@ -592,13 +618,26 @@ function refreshUserInChat(username: string): void {
 
 function processAddedNode(node: Node): void {
   if (!(node instanceof Element)) return;
-  if (node.classList.contains('seventv-message') || node.classList.contains('seventv-user-message')) processSevenTVMessage(node, tributeContext);
-  if (node.classList.contains('chat-line__message')) processNativeMessage(node, tributeContext);
-  if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) processUserCard(node, tributeContext);
+  if (node.classList.contains('seventv-message') || node.classList.contains('seventv-user-message')) {
+    enqueueOrProcessMessage(node as HTMLElement, 'seventv');
+  }
+  if (node.classList.contains('chat-line__message')) {
+    enqueueOrProcessMessage(node as HTMLElement, 'native');
+  }
+  // Usercards process only when open / present — no need to queue while hidden.
+  if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) {
+    processUserCard(node, tributeContext);
+  }
 
-  node.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => processSevenTVMessage(el, tributeContext));
-  node.querySelectorAll('.chat-line__message').forEach((el) => processNativeMessage(el, tributeContext));
-  node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => processUserCard(el, tributeContext));
+  node.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
+    enqueueOrProcessMessage(el as HTMLElement, 'seventv');
+  });
+  node.querySelectorAll('.chat-line__message').forEach((el) => {
+    enqueueOrProcessMessage(el as HTMLElement, 'native');
+  });
+  node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => {
+    processUserCard(el, tributeContext);
+  });
 }
 
 const repairQueue = new Set<HTMLElement>();
