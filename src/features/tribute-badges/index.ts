@@ -453,14 +453,30 @@ function initSocket(channelName: string): void {
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      // Keep background cache in sync so future content misses don't get stale 10min data
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      // Upsert background cache so future content misses use the live WS payload
+      browser.runtime.sendMessage({
+        type: 'UPSERT_TRIBUTE_BADGE_CACHE',
+        channelLogin: channelName,
+        login,
+        viewer: msg.data,
+        badges: msg.data.badges,
+        font_presets: msg.data.font_presets,
+      }).catch(() => {});
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      browser.runtime.sendMessage({
+        type: 'UPSERT_TRIBUTE_BADGE_CACHE',
+        channelLogin: channelName,
+        login,
+        viewer: {
+          badge_ids: [],
+          tra_badges: msg.data.tra_badges,
+          tsr_badges: msg.data.tsr_badges,
+        },
+      }).catch(() => {});
     } else {
       invalidateViewerBadgeCache(channelName, login);
       browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});

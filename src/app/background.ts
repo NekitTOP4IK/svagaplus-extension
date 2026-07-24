@@ -192,6 +192,38 @@ function cacheChannelBadges(channelLogin: string, response: ChannelBadgesRespons
   }
 }
 
+function upsertChannelBadgeViewer(
+  channelLogin: string,
+  login: string,
+  viewer: Record<string, unknown>,
+  badges?: Record<string, unknown>,
+  fontPresets?: Record<string, unknown>,
+): void {
+  const expiresAt = Date.now() + CHANNEL_BADGES_CACHE_TTL_MS;
+  const normalizedLogin = login.toLowerCase();
+  const viewerData = { ...viewer };
+  const badgeIds = Array.isArray(viewerData.badge_ids)
+    ? viewerData.badge_ids
+        .map((badgeId) => (typeof badgeId === 'string' || typeof badgeId === 'number' ? String(badgeId) : ''))
+        .filter(Boolean)
+    : [];
+  viewerData.badge_ids = badgeIds;
+  channelBadgeViewersCache.set(channelViewerKey(channelLogin, normalizedLogin), {
+    expiresAt,
+    data: viewerData,
+  });
+  if (badges && typeof badges === 'object') {
+    for (const [badgeId, badge] of Object.entries(badges)) {
+      channelBadgeAssetsCache.set(badgeId, { expiresAt, data: badge });
+    }
+  }
+  if (fontPresets && typeof fontPresets === 'object') {
+    for (const [fontPresetId, fontPreset] of Object.entries(fontPresets)) {
+      channelBadgeFontPresetsCache.set(fontPresetId, { expiresAt, data: fontPreset });
+    }
+  }
+}
+
 async function fetchChannelBadgesFromBackend(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
   const coolKey = channelBadgesKey(channelLogin);
   if (apiCooldown.isBlocked(coolKey)) {
@@ -575,6 +607,22 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
       }
       apiCooldown.clear(channelBadgesKey(channelLogin));
       // Note: we don't aggressively clear asset/font caches here (they are shared), but viewer data drives usage.
+      return Promise.resolve({ ok: true });
+    }
+    case 'UPSERT_TRIBUTE_BADGE_CACHE': {
+      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
+      const login = normalizeLogin((message as { login?: unknown }).login);
+      const viewer = (message as { viewer?: unknown }).viewer;
+      if (!channelLogin || !login || !isRecord(viewer)) return badRequest();
+      const badges = (message as { badges?: unknown }).badges;
+      const font_presets = (message as { font_presets?: unknown }).font_presets;
+      upsertChannelBadgeViewer(
+        channelLogin,
+        login,
+        viewer,
+        isRecord(badges) ? badges : undefined,
+        isRecord(font_presets) ? font_presets : undefined,
+      );
       return Promise.resolve({ ok: true });
     }
     case 'PREFETCH_CHANNEL_BADGE_GRANTS': {
