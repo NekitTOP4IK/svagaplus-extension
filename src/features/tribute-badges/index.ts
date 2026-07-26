@@ -70,6 +70,8 @@ const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
 const VISIBILITY_RECOVERY_DEBOUNCE_MS = 5_000;
 const REPROCESS_CHUNK_SIZE = 32;
+// Предел, который принимает обработчик FETCH_CHANNEL_BADGES в app/background.
+const VIEWER_BATCH_MAX = 100;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -122,6 +124,16 @@ function cacheViewerBadges(channelName: string, login: string, badges: Badge[]):
   if (Object.keys(viewerBadgeCache).length > VIEWER_CACHE_SWEEP_THRESHOLD) {
     sweepViewerBadgeCache();
   }
+}
+
+/** Только для тестов. */
+export function __resolveBadgesForLogin(channelName: string, login: string) {
+  return resolveBadgesForLogin(channelName, login);
+}
+
+/** Только для тестов. */
+export function __flushViewerBadgeBatchForTest(channelName: string): Promise<void> {
+  return flushViewerBadgeBatch(channelName);
 }
 
 /** Только для тестов. */
@@ -183,9 +195,29 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   state.running = true;
-  const logins = Array.from(state.pending);
+  const allLogins = Array.from(state.pending);
   state.pending.clear();
-  console.info(LOG_PREFIX, 'flush batch', { channelName, logins, count: logins.length });
+
+  try {
+    // Бэкграунд отклоняет батчи больше VIEWER_BATCH_MAX как bad_request,
+    // а обработчик ошибки ниже пишет каждому логину пустой негативный кэш.
+    // Набрать 100+ в одном окне дебаунса можно при одномоментной
+    // переобработке всего буфера чата с холодным кэшем: channel_refresh
+    // или возврат из фоновой вкладки на людном канале.
+    for (let i = 0; i < allLogins.length; i += VIEWER_BATCH_MAX) {
+      await flushOneViewerBadgeChunk(channelName, allLogins.slice(i, i + VIEWER_BATCH_MAX));
+    }
+  } finally {
+    state.running = false;
+    if (state.pending.size > 0 && !state.timer) {
+      const delay = document.hidden ? 300 : 80;
+      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), delay);
+    }
+  }
+}
+
+async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): Promise<void> {
+  console.info(LOG_PREFIX, 'flush batch', { channelName, count: logins.length });
 
   try {
     const payload = await fetchChannelBadges(channelName, logins);
@@ -208,12 +240,6 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
       };
       viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve([]);
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-    }
-  } finally {
-    state.running = false;
-    if (state.pending.size > 0 && !state.timer) {
-      const delay = document.hidden ? 300 : 80;
-      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), delay);
     }
   }
 }
