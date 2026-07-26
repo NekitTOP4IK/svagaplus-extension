@@ -16,10 +16,15 @@ export function showTooltip(event: Event, text: string | null | undefined): void
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
   const rect = target.getBoundingClientRect();
-  const left = Math.max(4, Math.min(window.innerWidth - tooltip.offsetWidth - 4, rect.left + rect.width / 2 - tooltip.offsetWidth / 2));
-  const top = Math.max(4, rect.top - tooltip.offsetHeight - 7);
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+
+  // Раньше здесь читались tooltip.offsetWidth/offsetHeight сразу после записи
+  // textContent и display — это форсировало синхронный layout на каждый hover
+  // по бейджу. Центрирование и подъём над элементом отдаются браузеру через
+  // transform, так что размеры самого тултипа знать не нужно.
+  // Тот же приём уже используется в social-rating/chat-badges.ts.
+  tooltip.style.left = `${rect.left + rect.width / 2}px`;
+  tooltip.style.top = `${rect.top - 7}px`;
+  tooltip.style.transform = 'translate(-50%, -100%)';
 }
 
 export function hideTooltip(): void {
