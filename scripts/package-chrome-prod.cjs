@@ -8,7 +8,9 @@ const { ZipArchive } = require('archiver');
 // bsdtar на Windows zip умеет, GNU tar на Linux — нет.
 const rootDir = path.resolve(__dirname, '..');
 const { name, version } = require(path.join(rootDir, 'package.json'));
-const distDir = path.join(rootDir, 'dist_chrome');
+const { outDirOf } = require('./build-channel.cjs');
+
+const distDir = path.join(rootDir, outDirOf({ prod: true }));
 const artifactsDir = path.join(rootDir, 'artifacts');
 
 if (!fs.existsSync(distDir)) {

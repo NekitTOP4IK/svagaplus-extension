@@ -32,9 +32,7 @@ function wait(ms) {
 }
 
 const messages = [];
-global.__BACKEND_URL__ = 'https://example.test';
-global.__FRONTEND_URL__ = 'https://example.test';
-global.__WS_BACKEND_URL__ = 'wss://example.test';
+require('./helpers/build-globals').defineBuildGlobals();
 
 /** @type {{ handlers: Record<string, Function>, lastSocket: object | null }} */
 const ioState = { handlers: {}, lastSocket: null };

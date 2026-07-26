@@ -43,9 +43,7 @@ function wait(ms) {
 }
 
 const messages = [];
-global.__BACKEND_URL__ = 'https://example.test';
-global.__FRONTEND_URL__ = 'https://example.test';
-global.__WS_BACKEND_URL__ = 'wss://example.test';
+require('./helpers/build-globals').defineBuildGlobals();
 
 const polyfillPath = require.resolve('webextension-polyfill');
 require.cache[polyfillPath] = {
