@@ -12,73 +12,95 @@
         <img class="brand-mark" src="../../icons/icon64.png" alt="" />
         <div class="brand-copy">
           <h1>Свага+</h1>
-          <!-- <p>Свагометр и Соц. рейтинг</p> -->
+          <p>Свагометр и соц. рейтинг</p>
         </div>
       </header>
 
-      <section class="panel" aria-labelledby="accountTitle">
+      <section class="panel reveal" aria-labelledby="accountTitle">
         <div class="panel-head">
           <h2 id="accountTitle">Аккаунт</h2>
-          <span id="connectionState" class="pill">Проверка...</span>
+          <span id="connectionState" class="pill pill--loading" role="status" aria-live="polite">
+            Проверка…
+          </span>
         </div>
 
-        <div id="connectedAccount" class="account" hidden>
-          <img id="accountAvatar" class="avatar" alt="" />
-          <div class="account-copy">
-            <div id="accountLogin" class="account-login"></div>
-            <div id="accountTelegramMeta" class="account-meta">
-              <span id="accountTelegramWarning" class="account-meta-icon" hidden aria-hidden="true">
-                <svg viewBox="0 0 20 20" focusable="false">
-                  <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
-                </svg>
-              </span>
-              <span id="accountTelegram"></span>
+        <div class="account-stack">
+          <!-- initial load -->
+          <div id="loadingAccount" class="account-state is-active" aria-hidden="true">
+            <div class="skeleton skeleton--avatar"></div>
+            <div class="account-copy">
+              <div class="skeleton skeleton--line skeleton--w60"></div>
+              <div class="skeleton skeleton--line skeleton--w40"></div>
+            </div>
+          </div>
+
+          <!-- connected -->
+          <div id="connectedAccount" class="account-state">
+            <div class="avatar-wrap">
+              <div id="accountAvatarFallback" class="avatar-fallback" aria-hidden="true"></div>
+              <img id="accountAvatar" class="avatar" alt="" hidden />
+            </div>
+            <div class="account-copy">
+              <div id="accountLogin" class="account-login"></div>
+              <div id="accountTelegramMeta" class="account-meta">
+                <span id="accountTelegramWarning" class="account-meta-icon" hidden aria-hidden="true">
+                  <svg viewBox="0 0 20 20" focusable="false">
+                    <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
+                  </svg>
+                </span>
+                <span id="accountTelegram"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- disconnected -->
+          <div id="disconnectedAccount" class="account-state">
+            <div class="account-copy">
+              <div class="account-login">Аккаунт не подключен</div>
+              <div class="account-meta-plain">Войдите, используя кнопочку ниже</div>
             </div>
           </div>
         </div>
 
-        <div id="disconnectedAccount" class="account account--empty" hidden>
-          <div class="account-copy">
-            <div class="account-login">Аккаунт не подключен</div>
-            <div class="account-meta">Войдите, используя кнопочку ниже</div>
-          </div>
-        </div>
-
         <div class="actions">
-          <button id="primaryAction" class="button button--primary" type="button">Подключить аккаунт</button>
+          <button id="primaryAction" class="button button--primary" type="button">
+            <span id="primaryActionSpinner" class="button-spinner" hidden aria-hidden="true"></span>
+            <span id="primaryActionLabel">Подключить аккаунт</span>
+          </button>
           <button id="secondaryAction" class="button button--text" type="button" hidden>Выйти</button>
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="settingsTitle">
+      <section class="panel reveal" aria-labelledby="settingsTitle">
         <div class="panel-head">
           <h2 id="settingsTitle">Настройки</h2>
         </div>
 
         <label class="setting setting--toggle" for="socialRatingToggle">
-          <div>
+          <div class="setting-copy">
             <div class="setting-label">Соц. рейтинг</div>
             <div class="setting-note">Для применения изменений обновите страницу.</div>
           </div>
-          <input id="socialRatingToggle" type="checkbox" />
+          <input id="socialRatingToggle" class="switch-input" type="checkbox" />
+          <span class="switch" aria-hidden="true"></span>
         </label>
       </section>
 
-      <footer class="footer" hidden>
-        <button id="openSettings" class="button button--secondary" type="button">Открыть настройки</button>
-      </footer>
-
-      <section id="popupErrorBanner" class="toast" hidden aria-live="polite">
-        <div class="toast-copy">
-          <div id="popupErrorTitle" class="toast-title"></div>
-          <div id="popupErrorDetail" class="toast-detail"></div>
+      <div id="popupErrorSlot" class="toast-slot">
+        <div class="toast-clip">
+          <section id="popupErrorBanner" class="toast" role="alert" aria-live="assertive">
+            <div class="toast-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" focusable="false">
+                <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
+              </svg>
+            </div>
+            <div class="toast-copy">
+              <div id="popupErrorTitle" class="toast-title"></div>
+              <div id="popupErrorDetail" class="toast-detail"></div>
+            </div>
+          </section>
         </div>
-        <div class="toast-icon" aria-hidden="true">
-          <svg viewBox="0 0 20 20" focusable="false">
-            <path d="M10 2.5 18 17.5H2L10 2.5Zm0 4.2a.9.9 0 0 0-.9.9v4.5a.9.9 0 1 0 1.8 0V7.6a.9.9 0 0 0-.9-.9Zm0 8.2a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2Z" />
-          </svg>
-        </div>
-      </section>
+      </div>
     </main>
     <script src="popup.js"></script>
   </body>

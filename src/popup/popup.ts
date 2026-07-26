@@ -2,6 +2,7 @@ import browser from '../shared/browser';
 import { FRONTEND_URL } from '../shared/config';
 import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../shared/types';
 import { buildPopupErrorBanner, type PopupErrorBanner } from './error-banner';
+import { derivePopupView, type AccountView, type PopupState, type UiStatus } from './view-model';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -35,11 +36,19 @@ type AuthFeedbackResponse = {
   error?: string;
 };
 
-type UiStatus = 'idle' | 'loading' | 'success' | 'error';
+const DEFAULT_SETTINGS: ExtensionSettings = { socialRatingEnabled: true };
 
-let uiStatus: UiStatus = 'idle';
-let statusDetail = '';
+const state: PopupState = {
+  hydrated: false,
+  uiStatus: 'idle',
+  account: null,
+  settings: DEFAULT_SETTINGS,
+  banner: null,
+};
+
+/** Banner raised by the current interaction; outranks the persisted auth feedback. */
 let transientBanner: PopupErrorBanner | null = null;
+let feedbackBanner: PopupErrorBanner | null = null;
 
 function $(id: string): HTMLElement | null {
   return document.getElementById(id);
@@ -69,158 +78,190 @@ function setHidden(id: string, hidden: boolean): void {
 
 function setText(id: string, text: string): void {
   const el = $(id);
-  if (el) el.textContent = text;
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
-function setConnectionState(text: string, tone: UiStatus = 'idle'): void {
+function setConnectionState(text: string, tone: UiStatus): void {
   const el = $('connectionState');
   if (!el) return;
-  el.textContent = text;
-  el.classList.remove('pill--loading', 'pill--success', 'pill--error');
-  if (tone === 'loading') el.classList.add('pill--loading');
-  if (tone === 'success') el.classList.add('pill--success');
-  if (tone === 'error') el.classList.add('pill--error');
+  if (el.textContent?.trim() !== text) el.textContent = text;
+  el.classList.toggle('pill--loading', tone === 'loading');
+  el.classList.toggle('pill--success', tone === 'success');
+  el.classList.toggle('pill--error', tone === 'error');
 }
 
-function setAvatar(url: string | null | undefined, login: string): void {
+const ACCOUNT_VIEW_IDS: Record<AccountView, string> = {
+  loading: 'loadingAccount',
+  connected: 'connectedAccount',
+  disconnected: 'disconnectedAccount',
+};
+
+/** Cross-fades between the three account states without resizing the popup. */
+function setAccountView(view: AccountView): void {
+  for (const [name, id] of Object.entries(ACCOUNT_VIEW_IDS)) {
+    $(id)?.classList.toggle('is-active', name === view);
+  }
+}
+
+function setAvatar(url: string | null, login: string): void {
   const avatar = $('accountAvatar') as HTMLImageElement | null;
+  const fallback = $('accountAvatarFallback');
+  if (fallback) fallback.textContent = login ? login.charAt(0) : '';
   if (!avatar) return;
-  if (url) {
-    avatar.src = url;
-    avatar.hidden = false;
-    avatar.alt = login ? `${login} avatar` : '';
+
+  if (!url) {
+    avatar.removeAttribute('src');
+    avatar.hidden = true;
     return;
   }
-  avatar.removeAttribute('src');
-  avatar.hidden = true;
+
+  // A dead Twitch CDN link must fall back to the initial, not a broken-image icon.
+  avatar.onerror = () => { avatar.hidden = true; };
+  avatar.onload = () => { avatar.hidden = false; };
+  avatar.alt = login ? `Аватар ${login}` : '';
+  if (avatar.getAttribute('src') !== url) {
+    avatar.hidden = true;
+    avatar.src = url;
+  }
 }
 
 function setPopupErrorBanner(error: PopupErrorBanner | null): void {
-  setHidden('popupErrorBanner', !error);
-  setText('popupErrorTitle', error?.title ?? '');
-  setText('popupErrorDetail', error?.detail ?? '');
+  // Keep the last copy while collapsing so the text does not vanish mid-animation.
+  if (error) {
+    setText('popupErrorTitle', error.title);
+    setText('popupErrorDetail', error.detail);
+  }
+  $('popupErrorSlot')?.classList.toggle('is-open', !!error);
 }
 
-async function refreshState(): Promise<void> {
+function render(): void {
+  state.banner = transientBanner ?? feedbackBanner;
+  const view = derivePopupView(state);
+
+  setConnectionState(view.statusText, view.statusTone);
+  setPopupErrorBanner(view.banner);
+  setAccountView(view.accountView);
+  setHidden('secondaryAction', !view.showSecondary);
+  setText('primaryActionLabel', view.primaryLabel);
+  setHidden('primaryActionSpinner', !view.busy);
+
+  const primary = $('primaryAction') as HTMLButtonElement | null;
+  const secondary = $('secondaryAction') as HTMLButtonElement | null;
+  const toggle = $('socialRatingToggle') as HTMLInputElement | null;
+  if (primary) primary.disabled = view.busy;
+  if (secondary) secondary.disabled = view.busy;
+  if (toggle) {
+    toggle.disabled = view.busy;
+    toggle.checked = view.socialRatingEnabled;
+  }
+
+  if (view.accountView === 'connected') {
+    const telegramMeta = $('accountTelegramMeta');
+    setText('accountLogin', view.login);
+    setText('accountTelegram', view.telegramText);
+    telegramMeta?.classList.toggle('account-meta--warning', !view.telegramLinked);
+    telegramMeta?.classList.toggle('account-meta--ok', view.telegramLinked);
+    setHidden('accountTelegramWarning', view.telegramLinked);
+    setAvatar(view.avatarUrl, view.login);
+  } else {
+    setAvatar(null, '');
+  }
+}
+
+async function loadState(): Promise<void> {
   const [accountRes, settingsRes, feedbackRes] = await Promise.all([
     sendMessage<ViewerAccountResponse>({ type: 'viewer:getAccount' }),
     sendMessage<SettingsResponse>({ type: 'settings:get' }),
     sendMessage<AuthFeedbackResponse>({ type: 'viewer:getAuthFeedback' }),
   ]);
 
-  const account = accountRes && accountRes.ok ? accountRes.account : null;
-  const settings = settingsRes && settingsRes.ok ? settingsRes.settings : { socialRatingEnabled: true };
-  const feedback = feedbackRes && feedbackRes.ok ? feedbackRes.feedback : null;
-  const banner = transientBanner ?? buildPopupErrorBanner(feedback);
-
-  const connected = !!account?.twitchLogin;
-  const busy = uiStatus === 'loading';
-  if (busy) {
-    setConnectionState('Подключение...', 'loading');
-  } else if (uiStatus === 'error') {
-    setConnectionState('Ошибка', 'error');
-  } else if (connected) {
-    setConnectionState('Подключено', uiStatus === 'success' ? 'success' : 'idle');
-  } else {
-    setConnectionState('Не подключено', 'idle');
-  }
-  setPopupErrorBanner(banner);
-  setHidden('connectedAccount', !connected);
-  setHidden('disconnectedAccount', connected);
-  setHidden('secondaryAction', !connected || busy);
-  setHidden('openSettings', true);
-  setText('primaryAction', busy ? 'Подключение...' : connected ? 'Настройки' : 'Подключить аккаунт');
-  setText('secondaryAction', 'Выйти');
-
-  const primaryAction = $('primaryAction') as HTMLButtonElement | null;
-  if (primaryAction) {
-    primaryAction.hidden = busy;
-    primaryAction.disabled = busy;
-    primaryAction.onclick = connected
-      ? async () => {
-          await browser.tabs.create({ url: `${FRONTEND_URL}/viewer/settings`, active: true });
-        }
-      : async () => {
-          uiStatus = 'loading';
-          statusDetail = 'Ожидаем подтверждение от Twitch...';
-          await refreshState();
-          const result = await sendMessage<StartConnectResponse>({ type: 'viewer:startConnect' });
-          if (!result?.ok) {
-            uiStatus = 'error';
-            if (result) {
-              transientBanner = buildPopupErrorBanner({
-                error: result.error ?? feedback?.error ?? 'popup_message_failed',
-                details: result.details ?? null,
-                redirectUri: result.redirectUri ?? null,
-                actualRedirectUri: result.actualRedirectUri ?? null,
-                source: feedback?.source ?? 'oauth',
-              });
-            }
-            statusDetail = '';
-            await refreshState();
-            return;
-          }
-          uiStatus = 'success';
-          statusDetail = '';
-          transientBanner = null;
-          await refreshState();
-        };
-  }
-
-  const secondaryAction = $('secondaryAction') as HTMLButtonElement | null;
-  if (secondaryAction) {
-    secondaryAction.disabled = busy;
-    secondaryAction.onclick = async () => {
-      uiStatus = 'idle';
-      statusDetail = '';
-      transientBanner = null;
-      await sendMessage({ type: 'viewer:disconnect' });
-      await refreshState();
-    };
-  }
-
-  if (connected) {
-    const telegramMeta = $('accountTelegramMeta');
-    const telegramWarning = $('accountTelegramWarning');
-    const telegramMissing = !account.telegramLinked;
-
-    setText('accountLogin', account.twitchLogin);
-    setText('accountTelegram', telegramMissing ? 'Telegram не подключен' : 'Telegram подключен');
-    telegramMeta?.classList.toggle('account-meta--warning', telegramMissing);
-    setHidden('accountTelegramWarning', !telegramMissing);
-    setAvatar(account.avatarUrl, account.twitchLogin);
-  } else {
-    setText('accountLogin', 'Аккаунт не подключен');
-    setText('accountTelegram', 'Подключение через Twitch OAuth');
-    $('accountTelegramMeta')?.classList.remove('account-meta--warning');
-    setHidden('accountTelegramWarning', true);
-    setAvatar(null, '');
-  }
-
-  const toggle = $('socialRatingToggle') as HTMLInputElement | null;
-  if (toggle) {
-    toggle.checked = settings.socialRatingEnabled;
-    toggle.disabled = busy;
-    toggle.onchange = async () => {
-      const next = await sendMessage<SettingsResponse>({
-        type: 'settings:update',
-        settings: { socialRatingEnabled: toggle.checked },
-      });
-      if (!next || !next.ok) {
-        console.error('[svagaplus][popup]', { action: 'settings:update', result: next });
-        transientBanner = buildPopupErrorBanner({
-          error: 'settings_update_failed',
-          details: 'Расширение не подтвердило изменение переключателя.',
-          source: 'popup',
-        });
-        toggle.checked = !toggle.checked;
-        await refreshState();
-        return;
-      }
-      transientBanner = null;
-      toggle.checked = next.settings.socialRatingEnabled;
-    };
-  }
+  state.account = accountRes && accountRes.ok ? accountRes.account : null;
+  state.settings = settingsRes && settingsRes.ok ? settingsRes.settings : DEFAULT_SETTINGS;
+  feedbackBanner = buildPopupErrorBanner(feedbackRes && feedbackRes.ok ? feedbackRes.feedback : null);
+  state.hydrated = true;
+  render();
 }
 
-void refreshState();
+async function connect(): Promise<void> {
+  state.uiStatus = 'loading';
+  transientBanner = null;
+  render();
+
+  const result = await sendMessage<StartConnectResponse>({ type: 'viewer:startConnect' });
+  if (!result?.ok) {
+    state.uiStatus = 'error';
+    if (result) {
+      transientBanner = buildPopupErrorBanner({
+        error: result.error ?? 'popup_message_failed',
+        details: result.details ?? null,
+        redirectUri: result.redirectUri ?? null,
+        actualRedirectUri: result.actualRedirectUri ?? null,
+        source: 'oauth',
+      });
+    }
+    await loadState();
+    return;
+  }
+
+  state.uiStatus = 'success';
+  transientBanner = null;
+  await loadState();
+}
+
+async function disconnect(): Promise<void> {
+  state.uiStatus = 'idle';
+  transientBanner = null;
+  state.account = null;
+  render();
+  await sendMessage({ type: 'viewer:disconnect' });
+  await loadState();
+}
+
+async function onToggleChange(toggle: HTMLInputElement): Promise<void> {
+  const next = await sendMessage<SettingsResponse>({
+    type: 'settings:update',
+    settings: { socialRatingEnabled: toggle.checked },
+  });
+
+  if (!next || !next.ok) {
+    console.error('[svagaplus][popup]', { action: 'settings:update', result: next });
+    transientBanner = buildPopupErrorBanner({
+      error: 'settings_update_failed',
+      details: 'Расширение не подтвердило изменение переключателя.',
+      source: 'popup',
+    });
+    render(); // rolls the switch back to the last confirmed value
+    return;
+  }
+
+  state.settings = next.settings;
+  transientBanner = null;
+  render();
+}
+
+function bindEvents(): void {
+  $('primaryAction')?.addEventListener('click', () => {
+    if (state.uiStatus === 'loading') return;
+    if (derivePopupView(state).primaryAction === 'settings') {
+      void browser.tabs
+        .create({ url: `${FRONTEND_URL}/viewer/settings`, active: true })
+        .then(() => window.close());
+      return;
+    }
+    void connect();
+  });
+
+  $('secondaryAction')?.addEventListener('click', () => {
+    if (state.uiStatus === 'loading') return;
+    void disconnect();
+  });
+
+  const toggle = $('socialRatingToggle') as HTMLInputElement | null;
+  toggle?.addEventListener('change', () => {
+    void onToggleChange(toggle);
+  });
+}
+
+bindEvents();
+render();
+void loadState();
