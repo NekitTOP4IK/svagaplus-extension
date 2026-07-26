@@ -600,6 +600,10 @@ let batchTimer: ReturnType<typeof setTimeout> | null = null;
 export function scheduleBatchReapply(): void {
   if (batchTimer) clearTimeout(batchTimer);
   batchTimer = setTimeout(() => {
+    // У большинства пользователей алиасов нет вовсе, а девять зон интерфейса
+    // обходились всё равно — каждые 50 мс, впустую.
+    if (Object.keys(getAllAliases()).length === 0) return;
+
     applyAliasesToAllChat();
     applyAliasesToOpenCards();
     applyAliasesToPinnedChat();
