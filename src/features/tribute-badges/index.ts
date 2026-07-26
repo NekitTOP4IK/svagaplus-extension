@@ -11,6 +11,14 @@ import type { Badge, FontPreset, ViewerConfig } from './types';
 const LOG_PREFIX = '[Svaga+ badges]';
 const TRIBUTE_NAME_SELECTORS = '.chat-author__display-name, .message-author__display-name, .chatter-name';
 
+// Префикс в CSS-группе раскрывается только по первому селектору: `.a b, c`
+// означает «.a b» и «c по всему документу», а не «.a b, .a c». Из-за этого
+// логины собирались из карточек зрителей, закреплённого чата и mod view.
+const CHAT_SCOPED_NAME_SELECTOR = TRIBUTE_NAME_SELECTORS
+  .split(',')
+  .map((sel) => `.chat-line__message ${sel.trim()}`)
+  .join(', ');
+
 declare const io: undefined | ((url: string, options: Record<string, unknown>) => {
   emit(event: string, payload?: unknown): void;
   on(event: string, handler: (payload?: any) => void): void;
@@ -203,9 +211,9 @@ const tributeContext = {
   resolveBadgesForLogin,
 };
 
-function collectVisibleLogins(): string[] {
+export function collectVisibleLogins(): string[] {
   const logins = new Set<string>();
-  document.querySelectorAll(`.chat-line__message ${TRIBUTE_NAME_SELECTORS}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
+  document.querySelectorAll(`${CHAT_SCOPED_NAME_SELECTOR}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
     const raw = (el.textContent || '').replace(/^@/, '').trim();
     const match = raw.match(/\(([^)]+)\)\s*$/);
     const login = normalizeLogin(match ? match[1] : raw);
