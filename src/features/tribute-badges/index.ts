@@ -631,50 +631,77 @@ function getTwitchLogin(): string | null {
   return null;
 }
 
-function refreshUserInChat(username: string): void {
-  const safe = username.replace(/(["\\])/g, '\\$1');
+const pendingRefreshLogins = new Set<string>();
+let refreshRafPending = false;
+
+/**
+ * Ставит логин в очередь на перерисовку.
+ *
+ * Раньше каждый вызов делал четыре полных обхода документа, причём
+ * `.chat-line__message` опрашивался дважды, а вызывался он прямо из
+ * обработчика `user_update` без коалесцирования: пачка из 30 событий давала
+ * порядка 22 500 DOM-операций подряд в главном потоке. Соседний
+ * scheduleDynamicStyles при этом уже был корректно завёрнут в rAF.
+ *
+ * Теперь — два обхода за кадр независимо от числа событий. Цена: обновление
+ * откладывается максимум на кадр и сливается с соседними. Единственный
+ * вызывающий (обработчик badge_update) результата не ждёт.
+ */
+export function refreshUserInChat(username: string): void {
   const normalized = normalizeLogin(username);
+  if (!normalized) return;
+  pendingRefreshLogins.add(normalized);
+  if (refreshRafPending) return;
+  refreshRafPending = true;
+  const run = () => {
+    refreshRafPending = false;
+    flushRefreshQueue();
+  };
+  if (document.hidden) setTimeout(run, 100);
+  else requestAnimationFrame(run);
+}
 
-  document.querySelectorAll(`[data-tcb-user="${safe}"]`).forEach((userBlock) => {
-    const msg = userBlock.closest<HTMLElement>('.seventv-message, .seventv-user-message');
-    if (msg) {
-      clearBadgeRenderState(msg);
-      processSevenTVMessage(msg, tributeContext);
-    }
-  });
-  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
-    if (element.querySelector(`.chat-author__display-name[data-tcb-user="${safe}"]`)) {
-      clearBadgeRenderState(element);
-      processNativeMessage(element, tributeContext);
-    }
+/**
+ * Логин элемента. render-state уже пишет dataset.tcbUserLogin, поэтому в
+ * типичном случае разбирать разметку не нужно. Фолбэк оставлен для сообщений,
+ * которые мы ещё не размечали, — случай «первый бейдж у пользователя»,
+ * ради которого в прежней версии существовали два дополнительных прохода.
+ */
+function loginOfElement(el: HTMLElement, nameSelector: string): string {
+  const known = el.dataset.tcbUserLogin;
+  if (known) return normalizeLogin(known);
+  const nameEl = el.querySelector<HTMLElement>(nameSelector);
+  if (!nameEl) return '';
+  const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
+  const intlMatch = raw.match(/\(([^)]+)\)\s*$/);
+  return normalizeLogin(
+    nameEl.getAttribute('data-a-user') ||
+    nameEl.parentElement?.getAttribute('data-a-user') ||
+    (intlMatch ? intlMatch[1] : raw)
+  );
+}
+
+function flushRefreshQueue(): void {
+  if (pendingRefreshLogins.size === 0) return;
+  const logins = new Set(pendingRefreshLogins);
+  pendingRefreshLogins.clear();
+
+  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((el) => {
+    if (!logins.has(loginOfElement(el, TRIBUTE_NAME_SELECTORS))) return;
+    clearBadgeRenderState(el);
+    processNativeMessage(el, tributeContext);
   });
 
-  // Also search messages without our data attr (first badge / previously empty).
   document.querySelectorAll<HTMLElement>('.seventv-user-message, .seventv-message').forEach((el) => {
-    const nameEl = el.querySelector<HTMLElement>('.seventv-chat-user-username');
-    if (!nameEl) return;
-    const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
-    const intlMatch = raw.match(/\((\w+)\)\s*$/);
-    const login = normalizeLogin(intlMatch ? intlMatch[1] : raw);
-    if (login === normalized) {
-      clearBadgeRenderState(el);
-      processSevenTVMessage(el, tributeContext);
-    }
+    if (!logins.has(loginOfElement(el, '.seventv-chat-user-username'))) return;
+    clearBadgeRenderState(el);
+    processSevenTVMessage(el, tributeContext);
   });
+}
 
-  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
-    const nameEl = element.querySelector<HTMLElement>(TRIBUTE_NAME_SELECTORS);
-    if (!nameEl) return;
-    const login = normalizeLogin(
-      nameEl.getAttribute('data-a-user') ||
-      nameEl.parentElement?.getAttribute('data-a-user') ||
-      nameEl.textContent
-    );
-    if (login === normalized) {
-      clearBadgeRenderState(element);
-      processNativeMessage(element, tributeContext);
-    }
-  });
+/** Только для тестов. */
+export function __flushRefreshQueueForTest(): void {
+  flushRefreshQueue();
 }
 
 function processAddedNode(node: Node): void {
