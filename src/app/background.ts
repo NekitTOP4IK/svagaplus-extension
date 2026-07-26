@@ -112,7 +112,7 @@ function uniqueSortedLogins(logins: string[]): string[] {
   return Array.from(new Set(logins.map((login) => login.trim().toLowerCase()).filter(Boolean))).sort();
 }
 
-function getCachedChannelBadges(channelLogin: string, logins: string[]): ChannelBadgesResponse | null {
+function getCachedChannelBadges(channelLogin: string, logins: string[], requireAll = true): ChannelBadgesResponse | null {
   const now = Date.now();
   const badges: Record<string, unknown> = {};
   const font_presets: Record<string, unknown> = {};
@@ -159,17 +159,29 @@ function getCachedChannelBadges(channelLogin: string, logins: string[]): Channel
     viewers[login] = viewer.data;
   }
 
-  // Не-null означает «в кэше есть ответ на весь запрос». Раньше здесь
-  // достаточно было одного закэшированного логина из N: allFresh вычислялся
-  // в трёх местах выше и полностью игнорировался, а вызывающий коротко
-  // замыкался на частичном ответе, оставляя остальных без бейджей на весь TTL.
-  if (!allFresh || Object.keys(viewers).length !== logins.length) return null;
+  // requireAll различает два вызова с РАЗНОЙ семантикой:
+  //
+  // - до запроса («есть ли в кэше полный ответ?») — строго. Раньше хватало
+  //   одного закэшированного логина из N, вызывающий коротко замыкался,
+  //   и остальные оставались без бейджей на весь TTL.
+  // - после запроса («отдай что есть») — нестрого. cacheChannelBadges кладёт
+  //   только тех, кого вернул бэкенд, а чаттеров без подписки он не возвращает.
+  //   Строгая проверка здесь давала null почти всегда, content-скрипт получал
+  //   ok:false, травил негативный кэш всему чанку и защёлкивал сообщения
+  //   в состояние 'empty' — навсегда, потому что shouldSkipBadgeRender
+  //   больше их не переобрабатывает.
+  if (requireAll && (!allFresh || Object.keys(viewers).length !== logins.length)) return null;
   return { ok: true, badges, font_presets, viewers };
 }
 
 /** Только для тестов. */
 export function __getCachedChannelBadges(channelLogin: string, logins: string[]): ChannelBadgesResponse | null {
   return getCachedChannelBadges(channelLogin, logins);
+}
+
+/** Только для тестов. */
+export function __fetchChannelBadges(channelLogin: string, logins: string[], force = false): Promise<ChannelBadgesResponse> {
+  return fetchChannelBadges(channelLogin, logins, force);
 }
 
 /** Только для тестов. */
@@ -327,7 +339,9 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
     if (!fetched.ok && missing.length === normalizedLogins.length) return fetched;
   }
 
-  return getCachedChannelBadges(channelLogin, normalizedLogins) ?? { ok: false, badges: {}, font_presets: {}, viewers: {} };
+  // Нестрого: после запроса частичный ответ — лучшее, что есть. Бэкенд
+  // не возвращает чаттеров без подписки, поэтому полного набора не будет никогда.
+  return getCachedChannelBadges(channelLogin, normalizedLogins, false) ?? { ok: false, badges: {}, font_presets: {}, viewers: {} };
 }
 
 function sanitizeViewerAccount(account: ViewerAccount | null): Omit<ViewerAccount, 'token'> | null {
