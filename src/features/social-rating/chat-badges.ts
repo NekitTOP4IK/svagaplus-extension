@@ -298,14 +298,20 @@ export async function refreshVisibleChatBadges(channelLogin: string): Promise<vo
 
   for (let i = 0; i < all.length; i += CHUNK) {
     const slice = all.slice(i, i + CHUNK);
-    for (const message of slice) {
+    // Последовательный await внутри чанка сводил на нет 80-мс окно батчинга
+    // в social-rating/background: каждое сообщение ждало свой round-trip,
+    // поэтому окно успевало собрать ровно один логин и уходил отдельный
+    // HTTP-запрос на человека. Чанк остаётся — он ограничивает пиковую
+    // нагрузку и даёт точку выхода между итерациями.
+    await Promise.all(slice.map((message) => {
       message.removeAttribute(DONE_ATTR);
-      if (message.classList.contains('seventv-user-message')) {
-        await processSevenTVChatBadges(message, channelLogin);
-      } else {
-        await processNativeChatBadges(message, channelLogin);
-      }
-    }
+      const task = message.classList.contains('seventv-user-message')
+        ? processSevenTVChatBadges(message, channelLogin)
+        : processNativeChatBadges(message, channelLogin);
+      // Сбой на одном сообщении не должен ронять чанк целиком и не должен
+      // стать unhandled rejection, пока соседи ещё в полёте.
+      return task.catch(() => {});
+    }));
     // Yield to the browser between chunks
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
