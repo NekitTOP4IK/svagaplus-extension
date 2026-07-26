@@ -137,6 +137,25 @@ function restoreElement(element: Element): void {
   element.removeAttribute('title');
 }
 
+// new RegExp вызывался для каждого алиаса на каждом текстовом узле: при 50
+// алиасах и обходе сотни узлов это 5000 компиляций. Регэксп зависит только
+// от логина, поэтому кэш — чистая функция и инвалидации не требует: удалённый
+// алиас просто перестаёт запрашиваться. Размер ограничен числом логинов,
+// которым когда-либо назначали алиас (импорт капнут на 1000).
+const aliasRegexCache = new Map<string, RegExp>();
+
+function aliasRegexFor(normalizedLogin: string): RegExp {
+  let regex = aliasRegexCache.get(normalizedLogin);
+  if (!regex) {
+    regex = new RegExp(`\\b${escapeRegex(normalizedLogin)}\\b`, 'gi');
+    aliasRegexCache.set(normalizedLogin, regex);
+  }
+  // Глобальный регэксп хранит lastIndex между вызовами — без сброса
+  // переиспользование экземпляра даёт пропуски совпадений.
+  regex.lastIndex = 0;
+  return regex;
+}
+
 function rewriteAliasTokens(element: Element): void {
   const aliases = getAllAliases();
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -152,9 +171,13 @@ function rewriteAliasTokens(element: Element): void {
       const normalizedLogin = normalizeLogin(login);
       if (!normalizedLogin || !alias) continue;
 
-      const regex = new RegExp(`\\b${escapeRegex(normalizedLogin)}\\b`, 'gi');
-      if (regex.test(next)) {
-        next = next.replace(regex, alias);
+      // Раньше здесь были test() и replace() с одним и тем же глобальным
+      // регэкспом: test() двигает lastIndex, поэтому переиспользовать
+      // кэшированный экземпляр между ними нельзя. Достаточно одного replace()
+      // со сравнением результата.
+      const replaced = next.replace(aliasRegexFor(normalizedLogin), alias);
+      if (replaced !== next) {
+        next = replaced;
         nodeMatchedLogin = normalizedLogin;
       }
     }
