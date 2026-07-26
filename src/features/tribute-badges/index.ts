@@ -95,9 +95,48 @@ function getBatchState(channelName: string) {
   return viewerBadgeBatchState[key];
 }
 
+const VIEWER_CACHE_SWEEP_THRESHOLD = 500;
+
+/**
+ * Удаляет просроченные записи. Раньше expiresAt только читался: запись жила
+ * до смены канала или channel_refresh, поэтому за восьмичасовой стрим на
+ * крупном канале кэш накапливал десятки тысяч уникальных чаттеров.
+ *
+ * Таймера нет намеренно — фоновая уборка в content-скрипте создаёт работу там,
+ * где вкладка должна простаивать.
+ */
+function sweepViewerBadgeCache(now: number = Date.now()): number {
+  let removed = 0;
+  for (const key of Object.keys(viewerBadgeCache)) {
+    if (viewerBadgeCache[key].expiresAt <= now) {
+      delete viewerBadgeCache[key];
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function cacheViewerBadges(channelName: string, login: string, badges: Badge[]): void {
   viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + VIEWER_BADGE_CACHE_TTL_MS, badges };
   console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
+  if (Object.keys(viewerBadgeCache).length > VIEWER_CACHE_SWEEP_THRESHOLD) {
+    sweepViewerBadgeCache();
+  }
+}
+
+/** Только для тестов. */
+export function __getViewerCacheSize(): number {
+  return Object.keys(viewerBadgeCache).length;
+}
+
+/** Только для тестов. */
+export function __sweepViewerBadgeCache(now?: number): number {
+  return sweepViewerBadgeCache(now);
+}
+
+/** Только для тестов. */
+export function __seedViewerBadgeCache(channel: string, login: string, expiresAt: number): void {
+  viewerBadgeCache[viewerBadgeKey(channel, login)] = { expiresAt, badges: [] };
 }
 
 function cacheViewerStyle(login: string, viewer: Record<string, unknown> | null | undefined): void {
@@ -190,7 +229,8 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
     console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
     return Promise.resolve(cached.badges);
   }
-  if (force) {
+  // Просроченную запись удаляем, а не оставляем лежать до смены канала.
+  if (force || cached) {
     delete viewerBadgeCache[key];
   }
 
