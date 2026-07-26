@@ -41,12 +41,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "icons/*",
-        "src/app/viewer-auth-callback.html"
+        "icons/*"
       ],
       "matches": [
-        "*://*.twitch.tv/*",
-        "__FRONTEND_URL__/*"
+        "*://*.twitch.tv/*"
       ]
     }
   ],

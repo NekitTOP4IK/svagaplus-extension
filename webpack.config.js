@@ -38,7 +38,6 @@ module.exports = (env = {}) => {
     entry: {
       'src/app/content': './src/app/content.ts',
       'src/app/background': './src/app/background.ts',
-      'src/app/viewer-auth-callback': './src/app/viewer-auth-callback.ts',
       'src/popup/popup': './src/popup/popup.ts',
     },
     output: {
