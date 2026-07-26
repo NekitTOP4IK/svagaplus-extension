@@ -9,6 +9,9 @@ import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } f
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
+// Подробный лог глушится в проде: на людном канале это строка на каждый
+// логин и на каждое попадание в кэш. Переключить вручную при отладке.
+const DEBUG = false;
 const TRIBUTE_NAME_SELECTORS = '.chat-author__display-name, .message-author__display-name, .chatter-name';
 
 // Префикс в CSS-группе раскрывается только по первому селектору: `.a b, c`
@@ -127,7 +130,7 @@ function sweepViewerBadgeCache(now: number = Date.now()): number {
 
 function cacheViewerBadges(channelName: string, login: string, badges: Badge[]): void {
   viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + VIEWER_BADGE_CACHE_TTL_MS, badges };
-  console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
+  if (DEBUG) console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
   if (Object.keys(viewerBadgeCache).length > VIEWER_CACHE_SWEEP_THRESHOLD) {
     sweepViewerBadgeCache();
   }
@@ -268,7 +271,7 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
     // Негативная запись гасит повторные запросы, но не притворяется ответом:
     // иначе сбой сети на долю секунды хоронил бы бейджи сообщения навсегда.
     if (cached.negative) return Promise.reject(new Error('badges unavailable'));
-    console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
+    if (DEBUG) console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
     return Promise.resolve(cached.badges);
   }
   // Просроченную запись удаляем, а не оставляем лежать до смены канала.
@@ -288,7 +291,7 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   viewerBadgeInflight[key] = { promise, resolve, reject };
   const state = getBatchState(normalizedChannel);
   state.pending.add(normalizedLoginValue);
-  console.debug(LOG_PREFIX, 'queue viewer', { channel: normalizedChannel, login: normalizedLoginValue, pending: state.pending.size });
+  if (DEBUG) console.debug(LOG_PREFIX, 'queue viewer', { channel: normalizedChannel, login: normalizedLoginValue, pending: state.pending.size });
   if (!state.running && !state.timer) {
     const delay = document.hidden ? 300 : 80;
     state.timer = window.setTimeout(() => void flushViewerBadgeBatch(normalizedChannel), delay);
@@ -554,7 +557,7 @@ function initSocket(channelName: string): void {
 
   socket.on('badge_update', (msg) => {
     if (!msg) return;
-    console.debug(LOG_PREFIX, 'badge_update raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
     if (msg.type === 'channel_refresh') {
       console.info(LOG_PREFIX, 'channel refresh', { channelName });
       invalidateViewerBadgeCache(channelName);
@@ -569,7 +572,7 @@ function initSocket(channelName: string): void {
     if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
 
     const login = normalizeLogin(msg.data.twitch_username);
-    console.debug(LOG_PREFIX, 'user update', {
+    if (DEBUG) console.debug(LOG_PREFIX, 'user update', {
       channelName,
       login,
       badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
@@ -615,7 +618,7 @@ function initSocket(channelName: string): void {
   });
 
   socket.on('social_rating_update', (msg) => {
-    console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
     if (!msg || typeof msg.channel !== 'string' || typeof msg.login !== 'string') return;
     const score = typeof msg.swag_score === 'number' ? msg.swag_score : msg.score;
     if (typeof score !== 'number' || !Number.isFinite(score)) return;
@@ -629,7 +632,7 @@ function initSocket(channelName: string): void {
   });
 
   socket.on('badge_grants_updated', (msg) => {
-    console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
     if (!msg || typeof msg.channel !== 'string') return;
     const payload = { channel: normalizeLogin(msg.channel) };
     for (const listener of badgeGrantListeners) listener(payload);
@@ -887,11 +890,10 @@ export function startTributeBadgesContent(): void {
   startObserver();
   hookNavigation();
 
-  chrome.runtime?.onMessage?.addListener((request, _sender, sendResponse) => {
-    if (request?.type === 'GET_LOGIN') {
-      sendResponse({ login: getTwitchLogin(), channel: currentChannelName });
-    }
-  });
+  // Обработчик GET_LOGIN удалён: отправителей нет ни одного. Он остался от
+  // старого попапа, читавшего логин через content-скрипт; нынешний ходит
+  // через Twitch OAuth. Заодно это было единственное прямое обращение
+  // к chrome.* в кодовой базе, где везде используется полифилл.
 }
 
 export function subscribeRealtimeChannel(handlers: {

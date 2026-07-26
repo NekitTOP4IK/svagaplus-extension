@@ -5,8 +5,9 @@ import { clearViewerAccount, getViewerAccount, setViewerAccount } from '../../sh
 import { ActiveBadgeGrant } from './types';
 import { debug, error } from './logger';
 
-declare const __BACKEND_URL__: string;
-export const BACKEND_URL = __BACKEND_URL__;
+// Единый источник: shared/config срезает хвостовой слэш, локальное объявление — нет.
+export { BACKEND_URL } from '../../shared/config';
+import { BACKEND_URL } from '../../shared/config';
 const CHANNELS_PATH = '/channels';
 const API_V3_CHANNELS_PATH = '/api/v3' + CHANNELS_PATH;
 const API_V3_SOCIAL_CHANNELS_PATH = '/api/v3/social' + CHANNELS_PATH;

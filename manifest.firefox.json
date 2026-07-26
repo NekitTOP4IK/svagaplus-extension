@@ -6,6 +6,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "tributealerts@nekittop4ik.qzz.io",
+      "strict_min_version": "115.0",
       "update_url": "__UPDATE_URL__"
     }
   },

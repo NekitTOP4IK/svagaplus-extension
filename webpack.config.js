@@ -53,7 +53,6 @@ module.exports = (env = {}) => {
     plugins: [
       new webpack.DefinePlugin({
         __BACKEND_URL__: JSON.stringify(backend),
-        __WS_BACKEND_URL__: JSON.stringify(wsBackend),
         __FRONTEND_URL__: JSON.stringify(frontend),
         __BUILD_CHANNEL__: JSON.stringify(channel),
       }),

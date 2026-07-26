@@ -10,7 +10,6 @@
 function defineBuildGlobals() {
   global.__BACKEND_URL__ = 'https://example.test';
   global.__FRONTEND_URL__ = 'https://example.test';
-  global.__WS_BACKEND_URL__ = 'wss://example.test';
   global.__BUILD_CHANNEL__ = 'staging';
 }
 

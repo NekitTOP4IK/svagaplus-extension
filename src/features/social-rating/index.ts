@@ -1,4 +1,5 @@
 import { debug } from './logger';
+import { BACKEND_URL } from '../../shared/config';
 import { extractCurrentChannel } from './channel';
 import { detectCardLogin } from './card-detector';
 import { injectBadge, updateBadgeScore, refreshOpenCardAwards } from './cards';
@@ -380,7 +381,7 @@ function watchNavigation(): void {
 // ── Startup ─────────────────────────────────────────────────────────────────
 
 export async function startSocialRatingContent(): Promise<void> {
-  debug('content', 'startup BACKEND_URL=', (window as any).__BACKEND_URL__ ?? 'n/a');
+  debug('content', 'startup BACKEND_URL=', BACKEND_URL);
   await initAliasManager();
 
   const startChannel = getCurrentChannel();
