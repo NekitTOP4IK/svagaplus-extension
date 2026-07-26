@@ -56,6 +56,15 @@ let lastVisibilityRecoveryAt = 0;
 let softReprocessGeneration = 0;
 let hiddenFlushGeneration = 0;
 const hiddenMessageQueue = new Set<HTMLElement>();
+// Держать больше бессмысленно: flushHiddenMessageQueue всё равно выбрасывает
+// всё, у чего !isConnected, а Twitch подрезает буфер чата примерно до 150 строк.
+// Без кэпа Set удерживал тысячи detached-поддеревьев, пока вкладка в фоне.
+const HIDDEN_QUEUE_MAX = 200;
+
+/** Только для тестов. */
+export function __getHiddenQueueSize(): number {
+  return hiddenMessageQueue.size;
+}
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
@@ -285,8 +294,13 @@ function softReprocessVisibleChat(): void {
   requestAnimationFrame(pump);
 }
 
-function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
+export function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
   if (document.hidden) {
+    if (hiddenMessageQueue.size >= HIDDEN_QUEUE_MAX) {
+      // Set сохраняет порядок вставки, поэтому первый ключ — самый старый.
+      const oldest = hiddenMessageQueue.values().next().value;
+      if (oldest) hiddenMessageQueue.delete(oldest);
+    }
     hiddenMessageQueue.add(el);
     return;
   }
