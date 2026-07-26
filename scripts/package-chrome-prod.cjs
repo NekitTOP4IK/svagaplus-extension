@@ -8,7 +8,7 @@ const { ZipArchive } = require('archiver');
 // bsdtar на Windows zip умеет, GNU tar на Linux — нет.
 const rootDir = path.resolve(__dirname, '..');
 const { name, version } = require(path.join(rootDir, 'package.json'));
-const { outDirOf } = require('./build-channel.cjs');
+const { outDirOf, assertProdChannel } = require('./build-channel.cjs');
 
 const distDir = path.join(rootDir, outDirOf({ prod: true }));
 const artifactsDir = path.join(rootDir, 'artifacts');
@@ -16,6 +16,9 @@ const artifactsDir = path.join(rootDir, 'artifacts');
 if (!fs.existsSync(distDir)) {
   throw new Error(`Missing build output: ${distDir}`);
 }
+
+// В артефакт для Chrome Web Store не должна попасть сборка со staging-бэкендом.
+assertProdChannel(distDir);
 
 fs.mkdirSync(artifactsDir, { recursive: true });
 
