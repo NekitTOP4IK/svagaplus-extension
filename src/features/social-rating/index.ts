@@ -33,12 +33,12 @@ import {
   scheduleBatchReapply,
 } from './alias-injector';
 
+// Без логирования: функция зовётся из цикла обработки мутаций (пять мест ниже),
+// то есть несколько раз на каждое сообщение чата. Даже при выключенном логгере
+// аргументы вычисляются на каждом вызове.
 function getCurrentChannel(): string {
   const { hostname, pathname } = window.location;
-  debug('content', 'getCurrentChannel hostname=', hostname, 'pathname=', pathname);
-  const ch = extractCurrentChannel(hostname, pathname);
-  debug('content', 'channel=', ch);
-  return ch;
+  return extractCurrentChannel(hostname, pathname);
 }
 
 const processing = new WeakSet<Element>();
@@ -389,8 +389,9 @@ export async function startSocialRatingContent(): Promise<void> {
   }
 
   applyAliasesToAllChat();
-  document.querySelectorAll('.chat-line__message').forEach((el) => processNativeChatBadges(el, getCurrentChannel()));
-  document.querySelectorAll('.seventv-user-message').forEach((el) => processSevenTVChatBadges(el, getCurrentChannel()));
+  // startChannel уже вычислен выше — незачем звать getCurrentChannel на каждое сообщение.
+  document.querySelectorAll('.chat-line__message').forEach((el) => processNativeChatBadges(el, startChannel));
+  document.querySelectorAll('.seventv-user-message').forEach((el) => processSevenTVChatBadges(el, startChannel));
   applyAliasesToOpenCards();
   applyAliasesToPinnedChat();
   applyAliasesToAutocomplete();
