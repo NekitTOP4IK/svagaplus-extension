@@ -1,10 +1,11 @@
 name: CI/CD
 
 on:
+  # Разработка идёт на staging, поэтому без него CI был бы post-merge гейтом,
+  # при том что джоба release публикует GitHub Release сразу после мержа в main.
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: read
@@ -29,32 +30,52 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test request cooldowns
-        run: npm run test:cooldown
+      - name: Test
+        run: npm test
 
-      - name: Test DOM stability
-        run: npm run test:dom
+      - name: Build all channels
+        run: |
+          npm run build
+          npm run build:firefox
+          npm run build:prod:firefox
+          npm run build:prod
 
-      - name: Test popup error banner
-        run: node test/popup-error-banner.test.js
-
-      - name: Test Firefox manifest
-        run: node test/firefox-manifest.test.js
-
-      - name: Build Chrome
-        run: npm run build
-
-      - name: Verify built versions
+      - name: Verify built manifests and channels
         run: |
           node <<'NODE'
           const fs = require('fs');
+          const path = require('path');
+          const { readBuildInfo } = require('./scripts/build-channel.cjs');
           const expected = require('./package.json').version;
-          for (const file of ['dist_chrome/manifest.json', 'dist_firefox/manifest.json']) {
-            const actual = JSON.parse(fs.readFileSync(file, 'utf8')).version;
-            if (actual !== expected) {
-              throw new Error(`${file}: expected version ${expected}, got ${actual}`);
+
+          const cases = [
+            ['dist/chrome-dev',   'staging'],
+            ['dist/firefox-dev',  'staging'],
+            ['dist/chrome-prod',  'prod'],
+            ['dist/firefox-prod', 'prod'],
+          ];
+
+          for (const [dir, channel] of cases) {
+            const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+            if (manifest.version !== expected) {
+              throw new Error(`${dir}: expected version ${expected}, got ${manifest.version}`);
+            }
+            const info = readBuildInfo(dir);
+            if (info.channel !== channel) {
+              throw new Error(`${dir}: expected channel ${channel}, got ${info.channel}`);
+            }
+            if (JSON.stringify(manifest).includes('__')) {
+              throw new Error(`${dir}: unsubstituted placeholder in manifest`);
             }
           }
+
+          // CI-сторона предохранителя канала: в prod-сборку не должен просочиться
+          // staging-бэкенд.
+          const prod = readBuildInfo('dist/chrome-prod');
+          if (prod.backendUrl.includes('staging')) {
+            throw new Error(`prod build points at a staging backend: ${prod.backendUrl}`);
+          }
+          console.log('manifests and channels verified');
           NODE
 
   release:
@@ -104,7 +125,7 @@ jobs:
         run: |
           npm run build:prod
           npm run build:prod:firefox
-          (cd dist_firefox && zip -rq "../artifacts/svagaplus-extension-firefox-v${VERSION}.zip" .)
+          (cd dist/firefox-prod && zip -rq "../../artifacts/svagaplus-extension-firefox-v${VERSION}.zip" .)
 
       - name: Verify release archives
         if: steps.version.outputs.exists == 'false'
