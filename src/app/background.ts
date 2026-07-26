@@ -159,8 +159,25 @@ function getCachedChannelBadges(channelLogin: string, logins: string[]): Channel
     viewers[login] = viewer.data;
   }
 
-  if (Object.keys(viewers).length === 0) return null;
+  // Не-null означает «в кэше есть ответ на весь запрос». Раньше здесь
+  // достаточно было одного закэшированного логина из N: allFresh вычислялся
+  // в трёх местах выше и полностью игнорировался, а вызывающий коротко
+  // замыкался на частичном ответе, оставляя остальных без бейджей на весь TTL.
+  if (!allFresh || Object.keys(viewers).length !== logins.length) return null;
   return { ok: true, badges, font_presets, viewers };
+}
+
+/** Только для тестов. */
+export function __getCachedChannelBadges(channelLogin: string, logins: string[]): ChannelBadgesResponse | null {
+  return getCachedChannelBadges(channelLogin, logins);
+}
+
+/** Только для тестов. */
+export function __seedChannelViewer(channelLogin: string, login: string, data: Record<string, unknown>): void {
+  channelBadgeViewersCache.set(channelViewerKey(channelLogin, login), {
+    expiresAt: Date.now() + 600_000,
+    data: data as never,
+  });
 }
 
 function cacheChannelBadges(channelLogin: string, response: ChannelBadgesResponse): void {

@@ -18,6 +18,10 @@ function stubExtensionApis() {
       lastError: undefined,
       sendMessage: () => Promise.resolve(null),
       onMessage: noopListener,
+      // app/background регистрирует их на верхнем уровне модуля, то есть
+      // прямо при импорте в тесте.
+      onInstalled: noopListener,
+      onStartup: noopListener,
       getURL: (path) => `chrome-extension://test-extension-id/${String(path).replace(/^\//, '')}`,
       getManifest: () => ({ version: '0.0.0-test' }),
     },
