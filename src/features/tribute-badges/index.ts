@@ -234,17 +234,6 @@ async function fetchBadges(channelName: string, logins = collectVisibleLogins(),
   if (normalizeLogin(channelName) === currentChannelName) initialFetchSucceeded = true;
 }
 
-function reprocessVisibleChat(): void {
-  document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
-    clearBadgeRenderState(el as HTMLElement);
-    processSevenTVMessage(el, tributeContext);
-  });
-  document.querySelectorAll('.chat-line__message').forEach((el) => {
-    clearBadgeRenderState(el as HTMLElement);
-    processNativeMessage(el, tributeContext);
-  });
-}
-
 function softReprocessVisibleChat(): void {
   const generation = ++softReprocessGeneration;
   const messages: HTMLElement[] = [
