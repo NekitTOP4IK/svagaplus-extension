@@ -54,6 +54,6 @@
     "64": "icons/icon64.png"
   },
   "background": {
-    "scripts": ["src/app/background-firefox.js"]
+    "scripts": ["src/app/background.js"]
   }
 }
