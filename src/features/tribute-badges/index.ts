@@ -28,6 +28,13 @@ declare const io: undefined | ((url: string, options: Record<string, unknown>) =
 interface CacheEntry {
   expiresAt: number;
   badges: Badge[];
+  /**
+   * Запись поставлена после сбоя запроса, а не после успешного ответа.
+   * Отличает «не смогли узнать» от «бейджей действительно нет»: первое
+   * не должно защёлкивать сообщение в состояние 'empty', из которого
+   * shouldSkipBadgeRender больше его не выпускает.
+   */
+  negative?: boolean;
 }
 
 const cachedUsers: Record<string, ViewerConfig> = {};
@@ -232,14 +239,20 @@ async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): 
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
     }
   } catch {
-    console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
+    console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, count: logins.length });
     for (const login of logins) {
-      viewerBadgeCache[viewerBadgeKey(channelName, login)] = {
+      const key = viewerBadgeKey(channelName, login);
+      // Негативная запись подавляет повторные запросы на 30 секунд, но помечена
+      // как negative: сбой не выдаётся за подтверждённое отсутствие бейджей.
+      viewerBadgeCache[key] = {
         expiresAt: Date.now() + VIEWER_BADGE_FAIL_CACHE_TTL_MS,
         badges: [],
+        negative: true,
       };
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve([]);
-      delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      // Отклоняем, а не резолвим пустым массивом: рендер уйдёт в 'failed'
+      // и будет переобработан, вместо того чтобы навсегда застрять в 'empty'.
+      viewerBadgeInflight[key]?.reject(new Error('badges unavailable'));
+      delete viewerBadgeInflight[key];
     }
   }
 }
@@ -252,6 +265,9 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   const key = viewerBadgeKey(normalizedChannel, normalizedLoginValue);
   const cached = viewerBadgeCache[key];
   if (cached && cached.expiresAt > Date.now() && !force) {
+    // Негативная запись гасит повторные запросы, но не притворяется ответом:
+    // иначе сбой сети на долю секунды хоронил бы бейджи сообщения навсегда.
+    if (cached.negative) return Promise.reject(new Error('badges unavailable'));
     console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
     return Promise.resolve(cached.badges);
   }
