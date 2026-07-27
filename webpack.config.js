@@ -2,6 +2,7 @@ const path = require('path');
 const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
 const { version } = require('./package.json');
+const { channelOf, outDirOf, BUILD_INFO_FILE } = require('./scripts/build-channel.cjs');
 
 const DEFAULTS = {
   BACKEND_URL_PROD: 'https://svagaplus.qzz.io',
@@ -28,6 +29,8 @@ module.exports = (env = {}) => {
   const backendHost = new URL(backend).host;
   const updateUrl = backend + '/api/extension/firefox-updates.json';
   const wsBackend = backend.replace(/^http/, 'ws').replace(/^https/, 'wss');
+  const channel = channelOf(env);
+  const outDir = outDirOf(env);
 
   return {
     mode: isProd ? 'production' : 'development',
@@ -35,12 +38,10 @@ module.exports = (env = {}) => {
     entry: {
       'src/app/content': './src/app/content.ts',
       'src/app/background': './src/app/background.ts',
-      'src/app/background-firefox': './src/app/background-firefox.ts',
-      'src/app/viewer-auth-callback': './src/app/viewer-auth-callback.ts',
       'src/popup/popup': './src/popup/popup.ts',
     },
     output: {
-      path: path.resolve(__dirname, isFirefox ? 'dist_firefox' : 'dist_chrome'),
+      path: path.resolve(__dirname, outDir),
       filename: '[name].js',
       clean: true,
     },
@@ -52,8 +53,8 @@ module.exports = (env = {}) => {
     plugins: [
       new webpack.DefinePlugin({
         __BACKEND_URL__: JSON.stringify(backend),
-        __WS_BACKEND_URL__: JSON.stringify(wsBackend),
         __FRONTEND_URL__: JSON.stringify(frontend),
+        __BUILD_CHANNEL__: JSON.stringify(channel),
       }),
       new CopyPlugin({
         patterns: [
@@ -82,6 +83,19 @@ module.exports = (env = {}) => {
             },
           },
           { from: 'icons', to: 'icons' },
+          {
+            // Маркер канала. Его читают sign_firefox.* и package-chrome-prod.cjs
+            // и отказываются публиковать всё, что собрано не в канале prod.
+            from: 'package.json',
+            to: BUILD_INFO_FILE,
+            transform() {
+              return JSON.stringify(
+                { channel, backendUrl: backend, version, builtAt: new Date().toISOString() },
+                null,
+                2
+              );
+            },
+          },
         ],
       }),
     ],

@@ -6,6 +6,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "tributealerts@nekittop4ik.qzz.io",
+      "strict_min_version": "115.0",
       "update_url": "__UPDATE_URL__"
     }
   },
@@ -41,12 +42,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "icons/*",
-        "src/app/viewer-auth-callback.html"
+        "icons/*"
       ],
       "matches": [
-        "*://*.twitch.tv/*",
-        "__FRONTEND_URL__/*"
+        "*://*.twitch.tv/*"
       ]
     }
   ],
@@ -54,6 +53,6 @@
     "64": "icons/icon64.png"
   },
   "background": {
-    "scripts": ["src/app/background-firefox.js"]
+    "scripts": ["src/app/background.js"]
   }
 }

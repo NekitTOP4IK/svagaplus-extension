@@ -18,10 +18,7 @@ require.cache[polyfillPath] = {
   },
 };
 
-// tsc leaves webpack DefinePlugin globals unresolved; set them for node tests.
-global.__BACKEND_URL__ = 'https://example.test';
-global.__FRONTEND_URL__ = 'https://example.test';
-global.__WS_BACKEND_URL__ = 'wss://example.test';
+require('./helpers/build-globals').defineBuildGlobals();
 
 const originalFetch = global.fetch;
 

@@ -34,10 +34,7 @@
 └── src/
     ├── app/
     │   ├── background.ts
-    │   ├── background-firefox.ts
-    │   ├── content.ts
-    │   ├── viewer-auth-callback.html
-    │   └── viewer-auth-callback.ts
+    │   └── content.ts
     ├── popup/
     │   ├── popup.html
     │   ├── popup.css

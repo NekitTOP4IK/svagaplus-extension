@@ -16,27 +16,61 @@ export function showTooltip(event: Event, text: string | null | undefined): void
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return;
   const rect = target.getBoundingClientRect();
-  const left = Math.max(4, Math.min(window.innerWidth - tooltip.offsetWidth - 4, rect.left + rect.width / 2 - tooltip.offsetWidth / 2));
-  const top = Math.max(4, rect.top - tooltip.offsetHeight - 7);
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+
+  // Раньше здесь читались tooltip.offsetWidth/offsetHeight сразу после записи
+  // textContent и display — это форсировало синхронный layout на каждый hover
+  // по бейджу. Центрирование и подъём над элементом отдаются браузеру через
+  // transform, так что размеры самого тултипа знать не нужно.
+  // Тот же приём уже используется в social-rating/chat-badges.ts.
+  tooltip.style.left = `${rect.left + rect.width / 2}px`;
+  tooltip.style.top = `${rect.top - 7}px`;
+  tooltip.style.transform = 'translate(-50%, -100%)';
 }
 
 export function hideTooltip(): void {
   tooltip.style.display = 'none';
 }
 
+let tooltipDelegationReady = false;
+
+/**
+ * Один набор слушателей на документ вместо трёх на каждый бейдж: на людном
+ * канале в чате тысячи <img>, то есть тысячи слушателей.
+ *
+ * mouseenter/mouseleave не всплывают, поэтому делегирование строится на
+ * mouseover/mouseout. wheel регистрируется пассивно — непассивный обработчик
+ * заставляет браузер ждать возможного preventDefault перед каждой прокруткой
+ * чата. Образец делегирования взят из social-rating/chat-badges.ts.
+ */
+function ensureTooltipDelegation(): void {
+  if (tooltipDelegationReady || typeof document === 'undefined') return;
+  tooltipDelegationReady = true;
+
+  document.addEventListener('mouseover', (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.classList.contains('tcb-badge-img')) {
+      showTooltip(event, (target as HTMLElement).dataset.tcbTitle);
+    }
+  });
+  document.addEventListener('mouseout', (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.classList.contains('tcb-badge-img')) {
+      hideTooltip();
+    }
+  });
+  document.addEventListener('wheel', hideTooltip, { passive: true });
+}
+
 export function createBadgeImg(badge: Badge): HTMLImageElement | null {
   const url = badge.image_url || badge.url;
   if (!url) return null;
+  ensureTooltipDelegation();
   const img = document.createElement('img');
   img.src = url;
   img.className = 'tcb-badge-img';
   img.alt = badge.title || 'Badge';
+  if (badge.title) img.dataset.tcbTitle = badge.title;
   img.style.cssText = 'width:18px!important;height:18px!important;min-width:18px!important;min-height:18px!important;max-width:18px!important;max-height:18px!important;';
-  img.addEventListener('mouseenter', (event) => showTooltip(event, badge.title));
-  img.addEventListener('mouseleave', hideTooltip);
-  img.addEventListener('wheel', hideTooltip);
   img.onerror = () => { img.style.display = 'none'; };
   return img;
 }

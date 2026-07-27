@@ -9,7 +9,18 @@ import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } f
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
+// Подробный лог глушится в проде: на людном канале это строка на каждый
+// логин и на каждое попадание в кэш. Переключить вручную при отладке.
+const DEBUG = false;
 const TRIBUTE_NAME_SELECTORS = '.chat-author__display-name, .message-author__display-name, .chatter-name';
+
+// Префикс в CSS-группе раскрывается только по первому селектору: `.a b, c`
+// означает «.a b» и «c по всему документу», а не «.a b, .a c». Из-за этого
+// логины собирались из карточек зрителей, закреплённого чата и mod view.
+const CHAT_SCOPED_NAME_SELECTOR = TRIBUTE_NAME_SELECTORS
+  .split(',')
+  .map((sel) => `.chat-line__message ${sel.trim()}`)
+  .join(', ');
 
 declare const io: undefined | ((url: string, options: Record<string, unknown>) => {
   emit(event: string, payload?: unknown): void;
@@ -20,6 +31,13 @@ declare const io: undefined | ((url: string, options: Record<string, unknown>) =
 interface CacheEntry {
   expiresAt: number;
   badges: Badge[];
+  /**
+   * Запись поставлена после сбоя запроса, а не после успешного ответа.
+   * Отличает «не смогли узнать» от «бейджей действительно нет»: первое
+   * не должно защёлкивать сообщение в состояние 'empty', из которого
+   * shouldSkipBadgeRender больше его не выпускает.
+   */
+  negative?: boolean;
 }
 
 const cachedUsers: Record<string, ViewerConfig> = {};
@@ -48,11 +66,22 @@ let lastVisibilityRecoveryAt = 0;
 let softReprocessGeneration = 0;
 let hiddenFlushGeneration = 0;
 const hiddenMessageQueue = new Set<HTMLElement>();
+// Держать больше бессмысленно: flushHiddenMessageQueue всё равно выбрасывает
+// всё, у чего !isConnected, а Twitch подрезает буфер чата примерно до 150 строк.
+// Без кэпа Set удерживал тысячи detached-поддеревьев, пока вкладка в фоне.
+const HIDDEN_QUEUE_MAX = 200;
+
+/** Только для тестов. */
+export function __getHiddenQueueSize(): number {
+  return hiddenMessageQueue.size;
+}
 
 const VIEWER_BADGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const VIEWER_BADGE_FAIL_CACHE_TTL_MS = 30_000;
 const VISIBILITY_RECOVERY_DEBOUNCE_MS = 5_000;
 const REPROCESS_CHUNK_SIZE = 32;
+// Предел, который принимает обработчик FETCH_CHANNEL_BADGES в app/background.
+const VIEWER_BATCH_MAX = 100;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -78,9 +107,58 @@ function getBatchState(channelName: string) {
   return viewerBadgeBatchState[key];
 }
 
+const VIEWER_CACHE_SWEEP_THRESHOLD = 500;
+
+/**
+ * Удаляет просроченные записи. Раньше expiresAt только читался: запись жила
+ * до смены канала или channel_refresh, поэтому за восьмичасовой стрим на
+ * крупном канале кэш накапливал десятки тысяч уникальных чаттеров.
+ *
+ * Таймера нет намеренно — фоновая уборка в content-скрипте создаёт работу там,
+ * где вкладка должна простаивать.
+ */
+function sweepViewerBadgeCache(now: number = Date.now()): number {
+  let removed = 0;
+  for (const key of Object.keys(viewerBadgeCache)) {
+    if (viewerBadgeCache[key].expiresAt <= now) {
+      delete viewerBadgeCache[key];
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function cacheViewerBadges(channelName: string, login: string, badges: Badge[]): void {
   viewerBadgeCache[viewerBadgeKey(channelName, login)] = { expiresAt: Date.now() + VIEWER_BADGE_CACHE_TTL_MS, badges };
-  console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
+  if (DEBUG) console.debug(LOG_PREFIX, 'cached viewer badges', { channelName, login, count: badges.length });
+  if (Object.keys(viewerBadgeCache).length > VIEWER_CACHE_SWEEP_THRESHOLD) {
+    sweepViewerBadgeCache();
+  }
+}
+
+/** Только для тестов. */
+export function __resolveBadgesForLogin(channelName: string, login: string) {
+  return resolveBadgesForLogin(channelName, login);
+}
+
+/** Только для тестов. */
+export function __flushViewerBadgeBatchForTest(channelName: string): Promise<void> {
+  return flushViewerBadgeBatch(channelName);
+}
+
+/** Только для тестов. */
+export function __getViewerCacheSize(): number {
+  return Object.keys(viewerBadgeCache).length;
+}
+
+/** Только для тестов. */
+export function __sweepViewerBadgeCache(now?: number): number {
+  return sweepViewerBadgeCache(now);
+}
+
+/** Только для тестов. */
+export function __seedViewerBadgeCache(channel: string, login: string, expiresAt: number): void {
+  viewerBadgeCache[viewerBadgeKey(channel, login)] = { expiresAt, badges: [] };
 }
 
 function cacheViewerStyle(login: string, viewer: Record<string, unknown> | null | undefined): void {
@@ -127,9 +205,29 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   state.running = true;
-  const logins = Array.from(state.pending);
+  const allLogins = Array.from(state.pending);
   state.pending.clear();
-  console.info(LOG_PREFIX, 'flush batch', { channelName, logins, count: logins.length });
+
+  try {
+    // Бэкграунд отклоняет батчи больше VIEWER_BATCH_MAX как bad_request,
+    // а обработчик ошибки ниже пишет каждому логину пустой негативный кэш.
+    // Набрать 100+ в одном окне дебаунса можно при одномоментной
+    // переобработке всего буфера чата с холодным кэшем: channel_refresh
+    // или возврат из фоновой вкладки на людном канале.
+    for (let i = 0; i < allLogins.length; i += VIEWER_BATCH_MAX) {
+      await flushOneViewerBadgeChunk(channelName, allLogins.slice(i, i + VIEWER_BATCH_MAX));
+    }
+  } finally {
+    state.running = false;
+    if (state.pending.size > 0 && !state.timer) {
+      const delay = document.hidden ? 300 : 80;
+      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), delay);
+    }
+  }
+}
+
+async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): Promise<void> {
+  console.info(LOG_PREFIX, 'flush batch', { channelName, count: logins.length });
 
   try {
     const payload = await fetchChannelBadges(channelName, logins);
@@ -144,20 +242,20 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
     }
   } catch {
-    console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, logins });
+    console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, count: logins.length });
     for (const login of logins) {
-      viewerBadgeCache[viewerBadgeKey(channelName, login)] = {
+      const key = viewerBadgeKey(channelName, login);
+      // Негативная запись подавляет повторные запросы на 30 секунд, но помечена
+      // как negative: сбой не выдаётся за подтверждённое отсутствие бейджей.
+      viewerBadgeCache[key] = {
         expiresAt: Date.now() + VIEWER_BADGE_FAIL_CACHE_TTL_MS,
         badges: [],
+        negative: true,
       };
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve([]);
-      delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
-    }
-  } finally {
-    state.running = false;
-    if (state.pending.size > 0 && !state.timer) {
-      const delay = document.hidden ? 300 : 80;
-      state.timer = window.setTimeout(() => void flushViewerBadgeBatch(channelName), delay);
+      // Отклоняем, а не резолвим пустым массивом: рендер уйдёт в 'failed'
+      // и будет переобработан, вместо того чтобы навсегда застрять в 'empty'.
+      viewerBadgeInflight[key]?.reject(new Error('badges unavailable'));
+      delete viewerBadgeInflight[key];
     }
   }
 }
@@ -170,10 +268,14 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   const key = viewerBadgeKey(normalizedChannel, normalizedLoginValue);
   const cached = viewerBadgeCache[key];
   if (cached && cached.expiresAt > Date.now() && !force) {
-    console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
+    // Негативная запись гасит повторные запросы, но не притворяется ответом:
+    // иначе сбой сети на долю секунды хоронил бы бейджи сообщения навсегда.
+    if (cached.negative) return Promise.reject(new Error('badges unavailable'));
+    if (DEBUG) console.debug(LOG_PREFIX, 'cache hit', { channel: normalizedChannel, login: normalizedLoginValue, count: cached.badges.length });
     return Promise.resolve(cached.badges);
   }
-  if (force) {
+  // Просроченную запись удаляем, а не оставляем лежать до смены канала.
+  if (force || cached) {
     delete viewerBadgeCache[key];
   }
 
@@ -189,7 +291,7 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
   viewerBadgeInflight[key] = { promise, resolve, reject };
   const state = getBatchState(normalizedChannel);
   state.pending.add(normalizedLoginValue);
-  console.debug(LOG_PREFIX, 'queue viewer', { channel: normalizedChannel, login: normalizedLoginValue, pending: state.pending.size });
+  if (DEBUG) console.debug(LOG_PREFIX, 'queue viewer', { channel: normalizedChannel, login: normalizedLoginValue, pending: state.pending.size });
   if (!state.running && !state.timer) {
     const delay = document.hidden ? 300 : 80;
     state.timer = window.setTimeout(() => void flushViewerBadgeBatch(normalizedChannel), delay);
@@ -203,9 +305,9 @@ const tributeContext = {
   resolveBadgesForLogin,
 };
 
-function collectVisibleLogins(): string[] {
+export function collectVisibleLogins(): string[] {
   const logins = new Set<string>();
-  document.querySelectorAll(`.chat-line__message ${TRIBUTE_NAME_SELECTORS}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
+  document.querySelectorAll(`${CHAT_SCOPED_NAME_SELECTOR}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
     const raw = (el.textContent || '').replace(/^@/, '').trim();
     const match = raw.match(/\(([^)]+)\)\s*$/);
     const login = normalizeLogin(match ? match[1] : raw);
@@ -232,17 +334,6 @@ async function fetchBadges(channelName: string, logins = collectVisibleLogins(),
     console.warn(LOG_PREFIX, 'fetchBadges batch rejected', { channelName, logins: pending });
   }
   if (normalizeLogin(channelName) === currentChannelName) initialFetchSucceeded = true;
-}
-
-function reprocessVisibleChat(): void {
-  document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
-    clearBadgeRenderState(el as HTMLElement);
-    processSevenTVMessage(el, tributeContext);
-  });
-  document.querySelectorAll('.chat-line__message').forEach((el) => {
-    clearBadgeRenderState(el as HTMLElement);
-    processNativeMessage(el, tributeContext);
-  });
 }
 
 function softReprocessVisibleChat(): void {
@@ -288,8 +379,13 @@ function softReprocessVisibleChat(): void {
   requestAnimationFrame(pump);
 }
 
-function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
+export function enqueueOrProcessMessage(el: HTMLElement, kind: 'native' | 'seventv'): void {
   if (document.hidden) {
+    if (hiddenMessageQueue.size >= HIDDEN_QUEUE_MAX) {
+      // Set сохраняет порядок вставки, поэтому первый ключ — самый старый.
+      const oldest = hiddenMessageQueue.values().next().value;
+      if (oldest) hiddenMessageQueue.delete(oldest);
+    }
     hiddenMessageQueue.add(el);
     return;
   }
@@ -461,7 +557,7 @@ function initSocket(channelName: string): void {
 
   socket.on('badge_update', (msg) => {
     if (!msg) return;
-    console.debug(LOG_PREFIX, 'badge_update raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
     if (msg.type === 'channel_refresh') {
       console.info(LOG_PREFIX, 'channel refresh', { channelName });
       invalidateViewerBadgeCache(channelName);
@@ -476,7 +572,7 @@ function initSocket(channelName: string): void {
     if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
 
     const login = normalizeLogin(msg.data.twitch_username);
-    console.debug(LOG_PREFIX, 'user update', {
+    if (DEBUG) console.debug(LOG_PREFIX, 'user update', {
       channelName,
       login,
       badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
@@ -522,7 +618,7 @@ function initSocket(channelName: string): void {
   });
 
   socket.on('social_rating_update', (msg) => {
-    console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
     if (!msg || typeof msg.channel !== 'string' || typeof msg.login !== 'string') return;
     const score = typeof msg.swag_score === 'number' ? msg.swag_score : msg.score;
     if (typeof score !== 'number' || !Number.isFinite(score)) return;
@@ -536,7 +632,7 @@ function initSocket(channelName: string): void {
   });
 
   socket.on('badge_grants_updated', (msg) => {
-    console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
+    if (DEBUG) console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
     if (!msg || typeof msg.channel !== 'string') return;
     const payload = { channel: normalizeLogin(msg.channel) };
     for (const listener of badgeGrantListeners) listener(payload);
@@ -580,50 +676,77 @@ function getTwitchLogin(): string | null {
   return null;
 }
 
-function refreshUserInChat(username: string): void {
-  const safe = username.replace(/(["\\])/g, '\\$1');
+const pendingRefreshLogins = new Set<string>();
+let refreshRafPending = false;
+
+/**
+ * Ставит логин в очередь на перерисовку.
+ *
+ * Раньше каждый вызов делал четыре полных обхода документа, причём
+ * `.chat-line__message` опрашивался дважды, а вызывался он прямо из
+ * обработчика `user_update` без коалесцирования: пачка из 30 событий давала
+ * порядка 22 500 DOM-операций подряд в главном потоке. Соседний
+ * scheduleDynamicStyles при этом уже был корректно завёрнут в rAF.
+ *
+ * Теперь — два обхода за кадр независимо от числа событий. Цена: обновление
+ * откладывается максимум на кадр и сливается с соседними. Единственный
+ * вызывающий (обработчик badge_update) результата не ждёт.
+ */
+export function refreshUserInChat(username: string): void {
   const normalized = normalizeLogin(username);
+  if (!normalized) return;
+  pendingRefreshLogins.add(normalized);
+  if (refreshRafPending) return;
+  refreshRafPending = true;
+  const run = () => {
+    refreshRafPending = false;
+    flushRefreshQueue();
+  };
+  if (document.hidden) setTimeout(run, 100);
+  else requestAnimationFrame(run);
+}
 
-  document.querySelectorAll(`[data-tcb-user="${safe}"]`).forEach((userBlock) => {
-    const msg = userBlock.closest<HTMLElement>('.seventv-message, .seventv-user-message');
-    if (msg) {
-      clearBadgeRenderState(msg);
-      processSevenTVMessage(msg, tributeContext);
-    }
-  });
-  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
-    if (element.querySelector(`.chat-author__display-name[data-tcb-user="${safe}"]`)) {
-      clearBadgeRenderState(element);
-      processNativeMessage(element, tributeContext);
-    }
+/**
+ * Логин элемента. render-state уже пишет dataset.tcbUserLogin, поэтому в
+ * типичном случае разбирать разметку не нужно. Фолбэк оставлен для сообщений,
+ * которые мы ещё не размечали, — случай «первый бейдж у пользователя»,
+ * ради которого в прежней версии существовали два дополнительных прохода.
+ */
+function loginOfElement(el: HTMLElement, nameSelector: string): string {
+  const known = el.dataset.tcbUserLogin;
+  if (known) return normalizeLogin(known);
+  const nameEl = el.querySelector<HTMLElement>(nameSelector);
+  if (!nameEl) return '';
+  const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
+  const intlMatch = raw.match(/\(([^)]+)\)\s*$/);
+  return normalizeLogin(
+    nameEl.getAttribute('data-a-user') ||
+    nameEl.parentElement?.getAttribute('data-a-user') ||
+    (intlMatch ? intlMatch[1] : raw)
+  );
+}
+
+function flushRefreshQueue(): void {
+  if (pendingRefreshLogins.size === 0) return;
+  const logins = new Set(pendingRefreshLogins);
+  pendingRefreshLogins.clear();
+
+  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((el) => {
+    if (!logins.has(loginOfElement(el, TRIBUTE_NAME_SELECTORS))) return;
+    clearBadgeRenderState(el);
+    processNativeMessage(el, tributeContext);
   });
 
-  // Also search messages without our data attr (first badge / previously empty).
   document.querySelectorAll<HTMLElement>('.seventv-user-message, .seventv-message').forEach((el) => {
-    const nameEl = el.querySelector<HTMLElement>('.seventv-chat-user-username');
-    if (!nameEl) return;
-    const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
-    const intlMatch = raw.match(/\((\w+)\)\s*$/);
-    const login = normalizeLogin(intlMatch ? intlMatch[1] : raw);
-    if (login === normalized) {
-      clearBadgeRenderState(el);
-      processSevenTVMessage(el, tributeContext);
-    }
+    if (!logins.has(loginOfElement(el, '.seventv-chat-user-username'))) return;
+    clearBadgeRenderState(el);
+    processSevenTVMessage(el, tributeContext);
   });
+}
 
-  document.querySelectorAll<HTMLElement>('.chat-line__message').forEach((element) => {
-    const nameEl = element.querySelector<HTMLElement>(TRIBUTE_NAME_SELECTORS);
-    if (!nameEl) return;
-    const login = normalizeLogin(
-      nameEl.getAttribute('data-a-user') ||
-      nameEl.parentElement?.getAttribute('data-a-user') ||
-      nameEl.textContent
-    );
-    if (login === normalized) {
-      clearBadgeRenderState(element);
-      processNativeMessage(element, tributeContext);
-    }
-  });
+/** Только для тестов. */
+export function __flushRefreshQueueForTest(): void {
+  flushRefreshQueue();
 }
 
 function processAddedNode(node: Node): void {
@@ -767,11 +890,10 @@ export function startTributeBadgesContent(): void {
   startObserver();
   hookNavigation();
 
-  chrome.runtime?.onMessage?.addListener((request, _sender, sendResponse) => {
-    if (request?.type === 'GET_LOGIN') {
-      sendResponse({ login: getTwitchLogin(), channel: currentChannelName });
-    }
-  });
+  // Обработчик GET_LOGIN удалён: отправителей нет ни одного. Он остался от
+  // старого попапа, читавшего логин через content-скрипт; нынешний ходит
+  // через Twitch OAuth. Заодно это было единственное прямое обращение
+  // к chrome.* в кодовой базе, где везде используется полифилл.
 }
 
 export function subscribeRealtimeChannel(handlers: {

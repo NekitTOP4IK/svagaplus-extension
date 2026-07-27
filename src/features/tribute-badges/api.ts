@@ -3,6 +3,9 @@ import { BACKEND_URL } from '../../shared/config';
 import type { Badge } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
+// Подробный лог глушится в проде: на людном канале это строка на каждый
+// логин и на каждое попадание в кэш. Переключить вручную при отладке.
+const DEBUG = false;
 
 interface V3BadgePayload {
   url?: unknown;
@@ -64,7 +67,7 @@ export function normalizeViewerBadges(payload: V3ChannelBadgesPayload | V3Viewer
     const normalized = legacyBadges
       .map((badge, index) => normalizeBadge(badge, index + 1))
       .filter((badge): badge is Badge => badge !== null);
-    console.debug(LOG_PREFIX, 'legacy socket badges', { count: normalized.length });
+    if (DEBUG) console.debug(LOG_PREFIX, 'legacy socket badges', { count: normalized.length });
     return normalized;
   }
 
@@ -79,7 +82,7 @@ export function normalizeViewerBadges(payload: V3ChannelBadgesPayload | V3Viewer
       return normalizeBadge(key ? badges[key] : null, index + 1);
     })
     .filter((badge: Badge | null): badge is Badge => badge !== null);
-  console.debug(LOG_PREFIX, 'resolved viewer badges', {
+  if (DEBUG) console.debug(LOG_PREFIX, 'resolved viewer badges', {
     login,
     badgeIds: badgeIds.map((badgeId) => String(badgeId)),
     count: normalized.length,
@@ -89,7 +92,7 @@ export function normalizeViewerBadges(payload: V3ChannelBadgesPayload | V3Viewer
 
 export async function fetchChannelBadges(channel: string, logins: string[], force = false): Promise<V3ChannelBadgesPayload | null> {
   if (!channel || logins.length === 0) return { badges: {}, font_presets: {}, viewers: {} };
-  console.debug(LOG_PREFIX, 'request batch', { channel, logins, force });
+  if (DEBUG) console.debug(LOG_PREFIX, 'request batch', { channel, logins, force });
   try {
     const response = await browser.runtime.sendMessage({
       type: 'FETCH_CHANNEL_BADGES',
@@ -105,7 +108,7 @@ export async function fetchChannelBadges(channel: string, logins: string[], forc
       font_presets: response.font_presets || {},
       viewers: response.viewers || {},
     };
-    console.debug(LOG_PREFIX, 'batch response', {
+    if (DEBUG) console.debug(LOG_PREFIX, 'batch response', {
       channel,
       viewers: Object.keys(payload.viewers || {}),
       badges: Object.keys(payload.badges || {}),

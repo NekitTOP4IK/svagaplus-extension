@@ -3,6 +3,44 @@ import { debug, error } from './logger';
 import { RatingData } from './types';
 import { ActiveBadgeGrant } from './types';
 
+type ChannelBadgesResponse = {
+  ok?: boolean;
+  badges?: Record<string, Record<string, unknown>>;
+  viewers?: Record<string, { badge_ids?: unknown[] }>;
+};
+
+function normalizeBadgeGrants(payload: ChannelBadgesResponse | null, logins: string[]): ActiveBadgeGrant[] {
+  if (!payload?.ok) return [];
+  const badges = payload.badges ?? {};
+  const viewers = payload.viewers ?? {};
+
+  return logins.flatMap((login) => {
+    const normalizedLogin = login.trim().toLowerCase();
+    const viewer = viewers[login] ?? viewers[normalizedLogin];
+    const badgeIds = Array.isArray(viewer?.badge_ids) ? viewer.badge_ids : [];
+    return badgeIds.flatMap((badgeId) => {
+      const badge = badges[String(badgeId)];
+      const rank = typeof badge?.rank === 'number' && Number.isSafeInteger(badge.rank) ? badge.rank : null;
+      if (!badge || badge.source !== 'social_rating' || rank === null) return [];
+      const rawUrl = typeof badge.url === 'string' ? badge.url : null;
+      if (!rawUrl) return [];
+      const imageUrl = /^https?:\/\//i.test(rawUrl)
+        ? rawUrl
+        : new URL(rawUrl, require('../../shared/config').BACKEND_URL).toString();
+      return [{
+        login: normalizedLogin,
+        kind: badge.kind === 'low' ? 'low' : 'high',
+        rank,
+        image_url: imageUrl,
+        title: typeof badge.title === 'string' ? badge.title : `Топ-${rank} чатер на канале`,
+        period_label: typeof badge.period_id === 'string' || typeof badge.period_id === 'number'
+          ? String(badge.period_id)
+          : '',
+      }];
+    });
+  });
+}
+
 export async function fetchRating(
   login: string,
   channelLogin: string,
@@ -28,11 +66,11 @@ export async function fetchBadgeGrants(
 ): Promise<ActiveBadgeGrant[]> {
   try {
     const result = await browser.runtime.sendMessage({
-      type: 'FETCH_BADGE_GRANTS',
+      type: 'FETCH_CHANNEL_BADGES',
       channelLogin,
       logins,
     });
-    return Array.isArray(result) ? result as ActiveBadgeGrant[] : [];
+    return normalizeBadgeGrants(result as ChannelBadgesResponse | null, logins);
   } catch (e) {
     error('api', 'fetchBadgeGrants error:', e);
     return [];
@@ -40,20 +78,15 @@ export async function fetchBadgeGrants(
 }
 
 export async function prefetchChannelBadgeGrants(channelLogin: string): Promise<void> {
-  try {
-    await browser.runtime.sendMessage({
-      type: 'PREFETCH_CHANNEL_BADGE_GRANTS',
-      channelLogin,
-    });
-  } catch (e) {
-    error('api', 'prefetchChannelBadgeGrants error:', e);
-  }
+  // Fetching on demand lets Social Rating share Tribute's cache and inflight
+  // requests instead of issuing its own channel-wide /badges request.
+  void channelLogin;
 }
 
 export async function refreshChannelBadgeGrants(channelLogin: string): Promise<void> {
   try {
     await browser.runtime.sendMessage({
-      type: 'REFRESH_CHANNEL_BADGE_GRANTS',
+      type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
       channelLogin,
     });
   } catch (e) {
@@ -65,17 +98,7 @@ export async function getChannelGrantsForLogin(
   channelLogin: string,
   login: string,
 ): Promise<ActiveBadgeGrant[]> {
-  try {
-    const result = await browser.runtime.sendMessage({
-      type: 'GET_CHANNEL_BADGE_GRANTS_FOR_LOGIN',
-      channelLogin,
-      login,
-    });
-    return Array.isArray(result) ? result as ActiveBadgeGrant[] : [];
-  } catch (e) {
-    error('api', 'getChannelGrantsForLogin error:', e);
-    return [];
-  }
+  return fetchBadgeGrants(channelLogin, [login]);
 }
 
 export async function getAliases(): Promise<Record<string, string>> {
