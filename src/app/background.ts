@@ -74,6 +74,13 @@ const channelBadgeViewersCache = new Map<string, ChannelBadgeViewerEntry>();
 const channelBadgeAssetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeFontPresetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeInflight = new Map<string, Promise<ChannelBadgesResponse>>();
+const channelBadgeViewerInflight = new Map<string, Promise<ChannelBadgesResponse>>();
+const channelBadgeFetchBatches = new Map<string, {
+  pending: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  waiters: Map<string, Array<(response: ChannelBadgesResponse) => void>>;
+}>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -251,7 +258,7 @@ function upsertChannelBadgeViewer(
   }
 }
 
-async function fetchChannelBadgesFromBackend(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
+async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
   const coolKey = channelBadgesKey(channelLogin);
   if (apiCooldown.isBlocked(coolKey)) {
     return emptyChannelBadgesResponse(logins);
@@ -261,7 +268,8 @@ async function fetchChannelBadgesFromBackend(channelLogin: string, logins: strin
   const inflight = channelBadgeInflight.get(requestKey);
   if (inflight) return inflight;
 
-  const request = (async (): Promise<ChannelBadgesResponse> => {
+  let request!: Promise<ChannelBadgesResponse>;
+  request = (async (): Promise<ChannelBadgesResponse> => {
     try {
       const params = new URLSearchParams({ viewers: logins.join(',') });
       const res = await fetch(`${BACKEND_URL}/api/v3/channels/${encodeURIComponent(channelLogin)}/badges?${params.toString()}`);
@@ -289,11 +297,70 @@ async function fetchChannelBadgesFromBackend(channelLogin: string, logins: strin
       return emptyChannelBadgesResponse(logins);
     } finally {
       channelBadgeInflight.delete(requestKey);
+      for (const login of logins) {
+        const key = channelViewerKey(channelLogin, login);
+        if (channelBadgeViewerInflight.get(key) === request) channelBadgeViewerInflight.delete(key);
+      }
     }
   })();
 
   channelBadgeInflight.set(requestKey, request);
+  for (const login of logins) {
+    channelBadgeViewerInflight.set(channelViewerKey(channelLogin, login), request);
+  }
   return request;
+}
+
+function getChannelBadgeFetchBatch(channelLogin: string) {
+  let batch = channelBadgeFetchBatches.get(channelLogin);
+  if (!batch) {
+    batch = { pending: new Set(), timer: null, running: false, waiters: new Map() };
+    channelBadgeFetchBatches.set(channelLogin, batch);
+  }
+  return batch;
+}
+
+async function flushChannelBadgeFetchBatch(channelLogin: string): Promise<void> {
+  const batch = getChannelBadgeFetchBatch(channelLogin);
+  if (batch.running || batch.pending.size === 0) return;
+  if (batch.timer) clearTimeout(batch.timer);
+  batch.timer = null;
+  batch.running = true;
+
+  try {
+    while (batch.pending.size > 0) {
+      const logins = Array.from(batch.pending).slice(0, 100);
+      for (const login of logins) batch.pending.delete(login);
+      const response = await fetchChannelBadgesFromBackendNow(channelLogin, logins);
+      for (const login of logins) {
+        const waiters = batch.waiters.get(login) ?? [];
+        batch.waiters.delete(login);
+        for (const resolve of waiters) resolve(response);
+      }
+    }
+  } finally {
+    batch.running = false;
+    if (batch.pending.size > 0 && !batch.timer) {
+      batch.timer = setTimeout(() => void flushChannelBadgeFetchBatch(channelLogin), 0);
+    } else if (batch.pending.size === 0) {
+      channelBadgeFetchBatches.delete(channelLogin);
+    }
+  }
+}
+
+function queueChannelBadgeFetch(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
+  const batch = getChannelBadgeFetchBatch(channelLogin);
+  return new Promise((resolve) => {
+    for (const login of logins) {
+      batch.pending.add(login);
+      const waiters = batch.waiters.get(login) ?? [];
+      waiters.push(resolve);
+      batch.waiters.set(login, waiters);
+    }
+    if (!batch.running && !batch.timer) {
+      batch.timer = setTimeout(() => void flushChannelBadgeFetchBatch(channelLogin), 80);
+    }
+  });
 }
 
 async function fetchImageAsDataUrl(url: string): Promise<{ dataUrl: string | null }> {
@@ -328,14 +395,30 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
   const cached = getCachedChannelBadges(channelLogin, normalizedLogins);
   if (cached && !force) return cached;
 
-  const missing = normalizedLogins.filter((login) => {
+  let missing = normalizedLogins.filter((login) => {
     if (force) return true;
     const viewer = getCachedChannelBadges(channelLogin, [login]);
     return !viewer;
   });
 
+  // Different batch shapes can overlap: [alice] may still be fetching when
+  // [alice, bob] arrives. The old batch-level key only deduplicated identical
+  // arrays, so both requests included alice. Wait for the per-viewer request,
+  // then request only logins that are still absent from the cache.
+  if (!force) {
+    const inFlight = Array.from(new Set(
+      missing
+        .map((login) => channelBadgeViewerInflight.get(channelViewerKey(channelLogin, login)))
+        .filter((request): request is Promise<ChannelBadgesResponse> => request != null),
+    ));
+    if (inFlight.length > 0) {
+      await Promise.all(inFlight);
+      missing = normalizedLogins.filter((login) => !getCachedChannelBadges(channelLogin, [login]));
+    }
+  }
+
   if (missing.length > 0) {
-    const fetched = await fetchChannelBadgesFromBackend(channelLogin, missing);
+    const fetched = await queueChannelBadgeFetch(channelLogin, missing);
     if (!fetched.ok && missing.length === normalizedLogins.length) return fetched;
   }
 

@@ -13,6 +13,8 @@ artifacts/
 web-ext-artifacts/
 *.zip
 *.crx
+dist-firefox/
+dist-chrome/
 
 # Node
 node_modules/
@@ -24,7 +26,7 @@ node_modules/
 .claude/
 CLAUDE.md
 AGENTS.md
-docs/superpowers/
+docs/
 mcps/
 
 # Agent tooling artifacts
