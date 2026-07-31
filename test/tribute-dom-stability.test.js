@@ -57,7 +57,7 @@ const { clearBadgeRenderState, getBadgeRenderState } = require('../dist-types/fe
   await tick();
 
   assert.equal(calls, 1);
-  assert.equal(document.querySelectorAll('.chat-line__message--badges .tcb-badge-img').length, 1);
+  assert.equal(document.querySelectorAll('.tcb-badge-list .tcb-badge-img').length, 1);
 
   // ── 2. Repair after external badge removal (mirrors the repair-observer path, which
   //    clears render state before re-processing).
@@ -66,7 +66,7 @@ const { clearBadgeRenderState, getBadgeRenderState } = require('../dist-types/fe
   processNativeMessage(message, context);
   await tick();
 
-  assert.equal(document.querySelectorAll('.chat-line__message--badges .tcb-badge-img').length, 1);
+  assert.equal(document.querySelectorAll('.tcb-badge-list .tcb-badge-img').length, 1);
 
   // ── 3. Empty result is cached as 'empty' — a second call for the same login must skip.
   let emptyCalls = 0;
@@ -140,14 +140,14 @@ const { clearBadgeRenderState, getBadgeRenderState } = require('../dist-types/fe
   };
   processSevenTVMessage(sevMsg, sevContext);
   await tick();
-  assert.equal(document.querySelectorAll('.seventv-chat-user-badge-list .tcb-badge-img').length, 1);
+  assert.equal(document.querySelectorAll('.tcb-badge-list-stv .tcb-badge-img').length, 1);
 
   // ── 7. 7TV repair after external removal.
-  document.querySelector('.seventv-chat-user-badge-list .tcb-badge-img').remove();
+  document.querySelector('.tcb-badge-list-stv .tcb-badge-img').remove();
   clearBadgeRenderState(sevMsg);
   processSevenTVMessage(sevMsg, sevContext);
   await tick();
-  assert.equal(document.querySelectorAll('.seventv-chat-user-badge-list .tcb-badge-img').length, 1);
+  assert.equal(document.querySelectorAll('.tcb-badge-list-stv .tcb-badge-img').length, 1);
 
   // ── 8. No infinite repair loop: re-render (self-initiated removal) must not trigger
   //    another repair. Simulate by re-processing an already-rendered message — the IIFE
