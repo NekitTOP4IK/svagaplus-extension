@@ -173,6 +173,14 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
     'channel_refresh must not UPSERT',
   );
 
+  messages.length = 0;
+  handlers.badge_update({ type: 'viewer_refresh', data: { viewer: 'alice' } });
+  await wait(50);
+  assert.ok(
+    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'alice' && !m.channelLogin),
+    'viewer_refresh must invalidate the viewer in every cached channel',
+  );
+
   console.log('tribute-ws-upsert: PASS');
 })().catch((error) => {
   console.error('tribute-ws-upsert: FAIL', error);

@@ -82,13 +82,9 @@ export function processSevenTVMessage(messageElement: Element, context: SevenTVC
         return;
       }
 
-      let badgeList = currentUserBlock.querySelector<HTMLElement>('.seventv-chat-user-badge-list');
-      if (!badgeList) {
-        badgeList = document.createElement('span');
-        badgeList.className = 'tcb-badge-list-stv';
-        currentUsernameEl.insertAdjacentElement('beforebegin', badgeList);
-      }
-      badgeList.querySelectorAll('.tcb-badge-img').forEach((badge) => badge.remove());
+      const badgeList = document.createElement('span');
+      badgeList.className = 'tcb-badge-list-stv';
+      currentUsernameEl.insertAdjacentElement('beforebegin', badgeList);
       uniqueBadges.forEach((badge) => {
         const img = createBadgeImg(badge);
         if (img) {

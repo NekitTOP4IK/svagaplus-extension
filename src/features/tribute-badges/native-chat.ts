@@ -80,15 +80,6 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
         return;
       }
 
-      if (currentBadgesContainer) {
-        uniqueBadges.forEach((badge) => {
-          const img = createBadgeImg(badge);
-          if (img) currentBadgesContainer.appendChild(img);
-        });
-        finishBadgeRender(targetElement, username, currentBadgesContainer.querySelector('.tcb-badge-img') != null);
-        return;
-      }
-
       const wrapper = document.createElement('span');
       wrapper.className = 'tcb-badge-list';
       uniqueBadges.forEach((badge) => {

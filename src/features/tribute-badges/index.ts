@@ -325,7 +325,7 @@ async function fetchBadges(channelName: string, logins = collectVisibleLogins(),
   if (forceRefresh) {
     for (const login of pending) {
       invalidateViewerBadgeCache(channelName, login);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
     }
   }
   try {
@@ -569,6 +569,15 @@ function initSocket(channelName: string): void {
       }, Math.random() * 5000);
       return;
     }
+    if (msg.type === 'viewer_refresh') {
+      const login = normalizeLogin(msg.data?.viewer);
+      if (!login) return;
+      console.info(LOG_PREFIX, 'viewer refresh', { channelName, login });
+      invalidateViewerBadgeCache(channelName, login);
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
+      refreshUserInChat(login);
+      return;
+    }
     if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
 
     const login = normalizeLogin(msg.data.twitch_username);
@@ -577,6 +586,7 @@ function initSocket(channelName: string): void {
       login,
       badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
       tra: Array.isArray(msg.data.tra_badges) ? msg.data.tra_badges.length : 0,
+      collectible: Array.isArray(msg.data.collectible_badges) ? msg.data.collectible_badges.length : 0,
       tsr: Array.isArray(msg.data.tsr_badges) ? msg.data.tsr_badges.length : 0,
     });
     if (msg.data.font_presets) Object.assign(fontPresets, msg.data.font_presets);
@@ -606,12 +616,11 @@ function initSocket(channelName: string): void {
       delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
       browser.runtime.sendMessage({
         type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
-        channelLogin: channelName,
         login,
       }).catch(() => {});
     } else {
       invalidateViewerBadgeCache(channelName, login);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
     }
     scheduleDynamicStyles();
     refreshUserInChat(login);

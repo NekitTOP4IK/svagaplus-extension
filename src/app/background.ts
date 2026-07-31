@@ -71,6 +71,7 @@ type ChannelBadgesResponse = {
 };
 
 const channelBadgeViewersCache = new Map<string, ChannelBadgeViewerEntry>();
+const channelBadgeViewerIndex = new Map<string, Set<string>>();
 const channelBadgeAssetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeFontPresetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeInflight = new Map<string, Promise<ChannelBadgesResponse>>();
@@ -105,6 +106,29 @@ function badRequest(): Promise<{ ok: false; error: 'bad_request' }> {
 
 function channelViewerKey(channelLogin: string, login: string): string {
   return `${channelLogin}:${login}`;
+}
+
+function cacheViewerEntry(channelLogin: string, login: string, entry: ChannelBadgeViewerEntry): void {
+  const normalizedChannel = channelLogin.toLowerCase();
+  const normalizedLogin = login.toLowerCase();
+  const key = channelViewerKey(normalizedChannel, normalizedLogin);
+  channelBadgeViewersCache.set(key, entry);
+  let keys = channelBadgeViewerIndex.get(normalizedLogin);
+  if (!keys) {
+    keys = new Set<string>();
+    channelBadgeViewerIndex.set(normalizedLogin, keys);
+  }
+  keys.add(key);
+}
+
+function deleteViewerEntry(key: string): void {
+  channelBadgeViewersCache.delete(key);
+  const separator = key.indexOf(':');
+  if (separator < 0) return;
+  const login = key.slice(separator + 1);
+  const keys = channelBadgeViewerIndex.get(login);
+  keys?.delete(key);
+  if (keys?.size === 0) channelBadgeViewerIndex.delete(login);
 }
 
 function emptyChannelBadgesResponse(logins: string[]): ChannelBadgesResponse {
@@ -193,7 +217,7 @@ export function __fetchChannelBadges(channelLogin: string, logins: string[], for
 
 /** Только для тестов. */
 export function __seedChannelViewer(channelLogin: string, login: string, data: Record<string, unknown>): void {
-  channelBadgeViewersCache.set(channelViewerKey(channelLogin, login), {
+  cacheViewerEntry(channelLogin, login, {
     expiresAt: Date.now() + 600_000,
     data: data as never,
   });
@@ -219,7 +243,7 @@ function cacheChannelBadges(channelLogin: string, response: ChannelBadgesRespons
         .filter(Boolean)
       : [];
     viewerData.badge_ids = badgeIds;
-    channelBadgeViewersCache.set(channelViewerKey(channelLogin, login.toLowerCase()), {
+    cacheViewerEntry(channelLogin, login.toLowerCase(), {
       expiresAt,
       data: viewerData,
     });
@@ -242,7 +266,7 @@ function upsertChannelBadgeViewer(
         .filter(Boolean)
     : [];
   viewerData.badge_ids = badgeIds;
-  channelBadgeViewersCache.set(channelViewerKey(channelLogin, normalizedLogin), {
+  cacheViewerEntry(channelLogin, normalizedLogin, {
     expiresAt,
     data: viewerData,
   });
@@ -388,7 +412,7 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
   if (force) {
     for (const login of normalizedLogins) {
       const key = channelViewerKey(channelLogin, login);
-      channelBadgeViewersCache.delete(key);
+      deleteViewerEntry(key);
     }
   }
 
@@ -705,18 +729,16 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
     case 'INVALIDATE_TRIBUTE_BADGE_CACHE': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
       const login = normalizeLogin((message as { login?: unknown }).login);
-      if (!channelLogin) return badRequest();
-      // Remove specific or whole channel from the three Maps
-      const prefix = `${channelLogin}:`;
+      if (!channelLogin && !login) return badRequest();
       if (login) {
-        const key = `${channelLogin}:${login}`;
-        channelBadgeViewersCache.delete(key);
+        for (const key of Array.from(channelBadgeViewerIndex.get(login) || [])) deleteViewerEntry(key);
       } else {
-        for (const k of Array.from(channelBadgeViewersCache.keys())) {
-          if (k.startsWith(prefix)) channelBadgeViewersCache.delete(k);
+        const prefix = `${channelLogin}:`;
+        for (const key of Array.from(channelBadgeViewersCache.keys())) {
+          if (key.startsWith(prefix)) deleteViewerEntry(key);
         }
       }
-      apiCooldown.clear(channelBadgesKey(channelLogin));
+      if (channelLogin) apiCooldown.clear(channelBadgesKey(channelLogin));
       return Promise.resolve({ ok: true });
     }
     case 'UPSERT_TRIBUTE_BADGE_CACHE': {
