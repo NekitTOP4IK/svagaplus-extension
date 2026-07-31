@@ -8,12 +8,15 @@ const LOG_PREFIX = '[Svaga+ badges]';
 const DEBUG = false;
 
 interface V3BadgePayload {
+  id?: unknown;
   url?: unknown;
   title?: unknown;
   source?: unknown;
   rank?: unknown;
   image_url?: unknown;
   active?: unknown;
+  rarity?: unknown;
+  is_animated?: unknown;
 }
 
 interface V3ViewerPayload {
@@ -25,6 +28,7 @@ interface V3ViewerPayload {
   font_preset_id?: unknown;
   tra_badges?: Array<Record<string, unknown>>;
   tsr_badges?: Array<Record<string, unknown>>;
+  collectible_badges?: Array<Record<string, unknown>>;
 }
 
 interface V3FontPresetPayload {
@@ -47,13 +51,15 @@ function normalizeBadge(raw: V3BadgePayload | null | undefined, fallbackRank: nu
   if (raw?.active === false) return null;
   const url = absoluteUrl(raw?.image_url ?? raw?.url);
   if (!url) return null;
-  const source = raw?.source === 'social_rating' ? 'tsr' : 'tra';
+  const source = raw?.source === 'social_rating' ? 'tsr' : raw?.source === 'collectible' ? 'collectible' : 'tra';
   return {
     url,
     image_url: url,
     title: typeof raw?.title === 'string' ? raw.title : 'Badge',
     rank: Number.isSafeInteger(raw?.rank) ? Number(raw?.rank) : fallbackRank,
     source,
+    rarity: typeof raw?.rarity === 'string' ? raw.rarity : null,
+    is_animated: raw?.is_animated === true,
   };
 }
 
@@ -62,6 +68,7 @@ export function normalizeViewerBadges(payload: V3ChannelBadgesPayload | V3Viewer
     const legacyPayload = payload as V3ViewerPayload | null | undefined;
     const legacyBadges = [
       ...(Array.isArray(legacyPayload?.tra_badges) ? legacyPayload.tra_badges : []),
+      ...(Array.isArray(legacyPayload?.collectible_badges) ? legacyPayload.collectible_badges : []),
       ...(Array.isArray(legacyPayload?.tsr_badges) ? legacyPayload.tsr_badges : []),
     ];
     const normalized = legacyBadges
