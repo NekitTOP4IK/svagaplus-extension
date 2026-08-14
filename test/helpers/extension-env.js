@@ -5,19 +5,29 @@
 // shared/browser (в частности features/tribute-badges/index), нельзя было
 // подключить в node-тестах вовсе.
 //
-// Заглушка минимальная и намеренно «глупая»: sendMessage резолвится в null,
-// слушатели никуда не подписываются. Тестам нужен факт загрузки модуля, а не
-// работающий messaging — если конкретному тесту нужно поведение, он подменяет
-// нужный метод сам, уже после вызова.
+// Заглушка минимальная и намеренно «глупая»: sendMessage резолвится в null.
+// Runtime message listeners сохраняются для интеграционных тестов; остальные
+// слушатели никуда не подписываются. Если тесту нужно другое поведение, он
+// подменяет нужный метод сам после вызова.
 function stubExtensionApis() {
   const noopListener = { addListener() {}, removeListener() {}, hasListener() { return false; } };
+  const runtimeMessageListeners = [];
+  const runtimeMessageListener = {
+    addListener(listener) { runtimeMessageListeners.push(listener); },
+    removeListener(listener) {
+      const index = runtimeMessageListeners.indexOf(listener);
+      if (index >= 0) runtimeMessageListeners.splice(index, 1);
+    },
+    hasListener(listener) { return runtimeMessageListeners.includes(listener); },
+  };
 
   const chrome = {
+    __runtimeMessageListeners: runtimeMessageListeners,
     runtime: {
       id: 'test-extension-id',
       lastError: undefined,
       sendMessage: () => Promise.resolve(null),
-      onMessage: noopListener,
+      onMessage: runtimeMessageListener,
       // app/background регистрирует их на верхнем уровне модуля, то есть
       // прямо при импорте в тесте.
       onInstalled: noopListener,
