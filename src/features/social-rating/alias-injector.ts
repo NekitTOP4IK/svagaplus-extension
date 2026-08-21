@@ -1,4 +1,4 @@
-import { getAlias, getAllAliases, isAliased } from './alias-manager';
+import { areCustomNicknamesEnabled, getAlias, getAllAliases, isAliased } from './alias-manager';
 import { detectCardLogin } from './card-detector';
 
 const ALIASED_ATTR = 'data-tsr-aliased';
@@ -749,6 +749,7 @@ export function injectCardAliasControls(
   onSetAlias: (login: string, alias: string) => void,
   onRemoveAlias: (login: string) => void,
 ): void {
+  if (!areCustomNicknamesEnabled()) return;
   if (cardEl.querySelector('[data-tsr-alias-controls]')) return;
 
   const alias = getAlias(login);

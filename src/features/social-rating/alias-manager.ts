@@ -2,14 +2,31 @@ import browser from 'webextension-polyfill';
 
 let aliases: Record<string, string> = {};
 let initialized = false;
+let customNicknamesEnabled = true;
 
 export async function initAliasManager(): Promise<void> {
   if (initialized) return;
-  const res = (await browser.runtime
-    .sendMessage({ type: 'GET_ALIASES' })
-    .catch(() => ({ aliases: {} }))) as { aliases?: Record<string, string> };
-  aliases = res.aliases ?? {};
+  const [aliasesResponse, settingsResponse] = await Promise.all([
+    browser.runtime
+      .sendMessage({ type: 'GET_ALIASES' })
+      .catch(() => ({ aliases: {} })) as Promise<{ aliases?: Record<string, string> }>,
+    browser.runtime
+      .sendMessage({ type: 'settings:get' })
+      .catch(() => null) as Promise<{
+        ok?: boolean;
+        settings?: { customNicknamesEnabled?: boolean };
+      } | null>,
+  ]);
+  customNicknamesEnabled = settingsResponse?.ok === true &&
+    typeof settingsResponse.settings?.customNicknamesEnabled === 'boolean'
+    ? settingsResponse.settings.customNicknamesEnabled
+    : true;
+  aliases = customNicknamesEnabled ? aliasesResponse.aliases ?? {} : {};
   initialized = true;
+}
+
+export function areCustomNicknamesEnabled(): boolean {
+  return customNicknamesEnabled;
 }
 
 export function getAlias(login: string): string | null {
@@ -65,7 +82,9 @@ export function getAllAliases(): Record<string, string> {
 export function onAliasChange(callback: () => void): () => void {
   const listener = (changes: browser.Storage.StorageAreaOnChangedChangesType) => {
     if ('aliases' in changes) {
-      aliases = (changes.aliases.newValue as Record<string, string>) ?? {};
+      aliases = customNicknamesEnabled
+        ? (changes.aliases.newValue as Record<string, string>) ?? {}
+        : {};
       callback();
     }
   };

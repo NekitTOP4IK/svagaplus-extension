@@ -1,5 +1,6 @@
 export interface ExtensionSettings {
   socialRatingEnabled: boolean;
+  customNicknamesEnabled: boolean;
 }
 
 export interface ViewerAccount {

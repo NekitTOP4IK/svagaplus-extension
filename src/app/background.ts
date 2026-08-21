@@ -800,6 +800,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         if (typeof patch.socialRatingEnabled !== 'boolean') return badRequest();
         nextPatch.socialRatingEnabled = patch.socialRatingEnabled;
       }
+      if ('customNicknamesEnabled' in patch) {
+        if (typeof patch.customNicknamesEnabled !== 'boolean') return badRequest();
+        nextPatch.customNicknamesEnabled = patch.customNicknamesEnabled;
+      }
 
       return setExtensionSettings(nextPatch).then(async (settings) => {
         await broadcastSettingsChanged(settings);

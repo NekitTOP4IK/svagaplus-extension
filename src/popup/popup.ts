@@ -36,7 +36,10 @@ type AuthFeedbackResponse = {
   error?: string;
 };
 
-const DEFAULT_SETTINGS: ExtensionSettings = { socialRatingEnabled: true };
+const DEFAULT_SETTINGS: ExtensionSettings = {
+  socialRatingEnabled: true,
+  customNicknamesEnabled: true,
+};
 
 const state: PopupState = {
   hydrated: false,
@@ -147,12 +150,17 @@ function render(): void {
 
   const primary = $('primaryAction') as HTMLButtonElement | null;
   const secondary = $('secondaryAction') as HTMLButtonElement | null;
-  const toggle = $('socialRatingToggle') as HTMLInputElement | null;
+  const socialRatingToggle = $('socialRatingToggle') as HTMLInputElement | null;
+  const customNicknamesToggle = $('customNicknamesToggle') as HTMLInputElement | null;
   if (primary) primary.disabled = view.busy;
   if (secondary) secondary.disabled = view.busy;
-  if (toggle) {
-    toggle.disabled = view.busy;
-    toggle.checked = view.socialRatingEnabled;
+  if (socialRatingToggle) {
+    socialRatingToggle.disabled = view.busy;
+    socialRatingToggle.checked = view.socialRatingEnabled;
+  }
+  if (customNicknamesToggle) {
+    customNicknamesToggle.disabled = view.busy;
+    customNicknamesToggle.checked = view.customNicknamesEnabled;
   }
 
   if (view.accountView === 'connected') {
@@ -217,10 +225,13 @@ async function disconnect(): Promise<void> {
   await loadState();
 }
 
-async function onToggleChange(toggle: HTMLInputElement): Promise<void> {
+async function onToggleChange(
+  toggle: HTMLInputElement,
+  setting: keyof ExtensionSettings,
+): Promise<void> {
   const next = await sendMessage<SettingsResponse>({
     type: 'settings:update',
-    settings: { socialRatingEnabled: toggle.checked },
+    settings: { [setting]: toggle.checked },
   });
 
   if (!next || !next.ok) {
@@ -256,9 +267,14 @@ function bindEvents(): void {
     void disconnect();
   });
 
-  const toggle = $('socialRatingToggle') as HTMLInputElement | null;
-  toggle?.addEventListener('change', () => {
-    void onToggleChange(toggle);
+  const socialRatingToggle = $('socialRatingToggle') as HTMLInputElement | null;
+  socialRatingToggle?.addEventListener('change', () => {
+    void onToggleChange(socialRatingToggle, 'socialRatingEnabled');
+  });
+
+  const customNicknamesToggle = $('customNicknamesToggle') as HTMLInputElement | null;
+  customNicknamesToggle?.addEventListener('change', () => {
+    void onToggleChange(customNicknamesToggle, 'customNicknamesEnabled');
   });
 }
 
