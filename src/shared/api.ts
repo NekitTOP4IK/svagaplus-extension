@@ -33,7 +33,7 @@ function absoluteUrl(url: string | null | undefined): string | null {
   return new URL(url, BACKEND_URL).toString();
 }
 
-function normalizeBadge(item: JsonObject | null | undefined, source: 'tra' | 'tsr'): V3Badge | null {
+function normalizeBadge(item: JsonObject | null | undefined, source: 'tra' | 'collectible' | 'tsr'): V3Badge | null {
   if (!item || item.active === false) return null;
   const id = typeof item.id === 'string' || typeof item.id === 'number' ? String(item.id) : '';
   const title = typeof item.title === 'string' ? item.title : '';
@@ -51,6 +51,8 @@ function normalizeBadge(item: JsonObject | null | undefined, source: 'tra' | 'ts
     rank,
     periodId,
     active: true,
+    rarity: typeof item.rarity === 'string' ? item.rarity : null,
+    isAnimated: item.is_animated === true,
   };
 }
 
@@ -66,6 +68,9 @@ function normalizeViewerBadges(entry: JsonObject | null | undefined): V3ViewerBa
   const tsrBadges = Array.isArray(entry.tsr_badges)
     ? entry.tsr_badges.map((badge) => normalizeBadge(badge as JsonObject, 'tsr')).filter(Boolean) as V3Badge[]
     : [];
+  const collectibleBadges = Array.isArray(entry.collectible_badges)
+    ? entry.collectible_badges.map((badge) => normalizeBadge(badge as JsonObject, 'collectible')).filter(Boolean) as V3Badge[]
+    : [];
 
   return {
     viewer: {
@@ -73,8 +78,9 @@ function normalizeViewerBadges(entry: JsonObject | null | undefined): V3ViewerBa
       login,
       twitchId: typeof viewer?.twitch_id === 'string' ? viewer.twitch_id : null,
     },
-    badges: [...traBadges, ...tsrBadges],
+    badges: [...traBadges, ...collectibleBadges, ...tsrBadges],
     traBadges,
+    collectibleBadges,
     tsrBadges,
   };
 }

@@ -8,6 +8,7 @@ const VIEWER_AUTH_FEEDBACK_KEY = 'svagaplus_viewer_auth_feedback';
 
 export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   socialRatingEnabled: true,
+  customNicknamesEnabled: true,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,6 +27,9 @@ export async function getExtensionSettings(): Promise<ExtensionSettings> {
     socialRatingEnabled: typeof stored.socialRatingEnabled === 'boolean'
       ? stored.socialRatingEnabled
       : DEFAULT_EXTENSION_SETTINGS.socialRatingEnabled,
+    customNicknamesEnabled: typeof stored.customNicknamesEnabled === 'boolean'
+      ? stored.customNicknamesEnabled
+      : DEFAULT_EXTENSION_SETTINGS.customNicknamesEnabled,
   };
 }
 
@@ -35,6 +39,9 @@ export async function setExtensionSettings(patch: Partial<ExtensionSettings>): P
     socialRatingEnabled: typeof patch.socialRatingEnabled === 'boolean'
       ? patch.socialRatingEnabled
       : current.socialRatingEnabled,
+    customNicknamesEnabled: typeof patch.customNicknamesEnabled === 'boolean'
+      ? patch.customNicknamesEnabled
+      : current.customNicknamesEnabled,
   };
   await browser.storage.local.set({ [SETTINGS_KEY]: next });
   return next;

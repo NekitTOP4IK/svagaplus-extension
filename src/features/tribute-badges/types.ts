@@ -3,7 +3,9 @@ export interface Badge {
   url?: string | null;
   title?: string | null;
   rank?: number | null;
-  source?: 'tra' | 'tsr' | string;
+  source?: 'tra' | 'collectible' | 'tsr' | string;
+  rarity?: 'common' | 'rare' | 'epic' | 'mythic' | string | null;
+  is_animated?: boolean;
 }
 
 export interface ViewerConfig {
@@ -27,4 +29,3 @@ export interface FontPreset {
   size_adjust?: number;
   is_pixel_font?: boolean;
 }
-

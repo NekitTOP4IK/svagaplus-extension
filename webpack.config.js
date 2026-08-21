@@ -5,9 +5,9 @@ const { version } = require('./package.json');
 const { channelOf, outDirOf, BUILD_INFO_FILE } = require('./scripts/build-channel.cjs');
 
 const DEFAULTS = {
-  BACKEND_URL_PROD: 'https://svagaplus.qzz.io',
+  BACKEND_URL_PROD: 'https://svagaplus.com',
   BACKEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
-  FRONTEND_URL_PROD: 'https://svagaplus.qzz.io',
+  FRONTEND_URL_PROD: 'https://svagaplus.com',
   FRONTEND_URL_DEV: 'https://svaga-staging.nekittop4ik.qzz.io',
 };
 

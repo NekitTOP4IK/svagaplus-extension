@@ -6,6 +6,7 @@ import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
 import { processUserCard } from './usercard';
 import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } from './render-state';
+import { ChannelStyleCache } from './channel-style-cache';
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 const LOG_PREFIX = '[Svaga+ badges]';
@@ -40,9 +41,10 @@ interface CacheEntry {
   negative?: boolean;
 }
 
-const cachedUsers: Record<string, ViewerConfig> = {};
-const fontPresets: Record<string, FontPreset> = {};
+const channelStyles = new ChannelStyleCache();
 const viewerBadgeCache: Record<string, CacheEntry> = {};
+const viewerBadgeGenerations: Record<string, number> = {};
+const viewerBadgeGenerationHolds: Record<string, number> = {};
 const viewerBadgeInflight: Record<string, {
   promise: Promise<Badge[]>;
   resolve: (badges: Badge[]) => void;
@@ -88,7 +90,11 @@ function scheduleDynamicStyles(): void {
   styleRafPending = true;
   const run = () => {
     styleRafPending = false;
-    updateDynamicStyles(cachedUsers, fontPresets, BACKEND_URL);
+    updateDynamicStyles(
+      channelStyles.usersFor(currentChannelName),
+      channelStyles.fontPresetsFor(currentChannelName),
+      BACKEND_URL,
+    );
   };
   if (document.hidden) {
     setTimeout(run, 100);
@@ -152,6 +158,11 @@ export function __getViewerCacheSize(): number {
 }
 
 /** Только для тестов. */
+export function __getViewerGenerationSize(): number {
+  return Object.keys(viewerBadgeGenerations).length;
+}
+
+/** Только для тестов. */
 export function __sweepViewerBadgeCache(now?: number): number {
   return sweepViewerBadgeCache(now);
 }
@@ -161,22 +172,45 @@ export function __seedViewerBadgeCache(channel: string, login: string, expiresAt
   viewerBadgeCache[viewerBadgeKey(channel, login)] = { expiresAt, badges: [] };
 }
 
-function cacheViewerStyle(login: string, viewer: Record<string, unknown> | null | undefined): void {
-  if (!viewer || typeof viewer !== 'object') return;
-  const nextConfig: ViewerConfig = {};
-  if (typeof viewer.name_color === 'string') nextConfig.name_color = viewer.name_color;
-  if (typeof viewer.name_gradient === 'string') nextConfig.name_gradient = viewer.name_gradient;
-  if (typeof viewer.name_css === 'string') nextConfig.name_css = viewer.name_css;
-  if (typeof viewer.name_preset_name === 'string') nextConfig.name_preset_name = viewer.name_preset_name;
-  if (typeof viewer.font_preset_id === 'string' || typeof viewer.font_preset_id === 'number') nextConfig.font_preset_id = viewer.font_preset_id;
-  if (Object.keys(nextConfig).length === 0) return;
-  cachedUsers[normalizeLogin(login)] = { ...(cachedUsers[normalizeLogin(login)] || {}), ...nextConfig };
+function cacheViewerStyle(
+  channelName: string,
+  login: string,
+  viewer: Record<string, unknown> | null | undefined,
+): void {
+  channelStyles.replaceViewer(channelName, login, viewer);
   scheduleDynamicStyles();
+}
+
+function incrementViewerBadgeGeneration(channelName: string, login: string): void {
+  const key = viewerBadgeKey(channelName, login);
+  viewerBadgeGenerations[key] = (viewerBadgeGenerations[key] || 0) + 1;
+}
+
+function holdViewerBadgeGeneration(key: string): void {
+  viewerBadgeGenerationHolds[key] = (viewerBadgeGenerationHolds[key] || 0) + 1;
+}
+
+function releaseViewerBadgeGeneration(key: string): void {
+  const holds = (viewerBadgeGenerationHolds[key] || 0) - 1;
+  if (holds > 0) viewerBadgeGenerationHolds[key] = holds;
+  else delete viewerBadgeGenerationHolds[key];
+  cleanupViewerBadgeGeneration(key);
+}
+
+function cleanupViewerBadgeGeneration(key: string): void {
+  if (viewerBadgeGenerationHolds[key] || viewerBadgeInflight[key]) return;
+  delete viewerBadgeGenerations[key];
 }
 
 function invalidateViewerBadgeCache(channelName: string, login?: string): void {
   const channelPrefix = `${normalizeLogin(channelName)}:`;
   if (!login) {
+    const invalidatedKeys = new Set([
+      ...Object.keys(viewerBadgeCache),
+      ...Object.keys(viewerBadgeInflight),
+      ...Array.from(getBatchState(channelName).pending, (pendingLogin) => viewerBadgeKey(channelName, pendingLogin)),
+    ].filter((key) => key.startsWith(channelPrefix)));
+    for (const key of invalidatedKeys) viewerBadgeGenerations[key] = (viewerBadgeGenerations[key] || 0) + 1;
     for (const key of Object.keys(viewerBadgeCache)) if (key.startsWith(channelPrefix)) delete viewerBadgeCache[key];
     for (const key of Object.keys(viewerBadgeInflight)) {
       if (key.startsWith(channelPrefix)) {
@@ -191,11 +225,37 @@ function invalidateViewerBadgeCache(channelName: string, login?: string): void {
       state.timer = null;
       state.running = false;
     }
+    for (const key of invalidatedKeys) cleanupViewerBadgeGeneration(key);
     return;
   }
-  delete viewerBadgeCache[viewerBadgeKey(channelName, login)];
-  viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.reject(new Error('cache invalidated'));
-  delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+  const key = viewerBadgeKey(channelName, login);
+  incrementViewerBadgeGeneration(channelName, login);
+  delete viewerBadgeCache[key];
+  getBatchState(channelName).pending.delete(normalizeLogin(login));
+  viewerBadgeInflight[key]?.reject(new Error('cache invalidated'));
+  delete viewerBadgeInflight[key];
+  cleanupViewerBadgeGeneration(key);
+}
+
+function invalidateViewerBadgeEverywhere(login: string): void {
+  const normalizedLoginValue = normalizeLogin(login);
+  if (!normalizedLoginValue) return;
+  const suffix = `:${normalizedLoginValue}`;
+  const keys = new Set([
+    ...Object.keys(viewerBadgeCache),
+    ...Object.keys(viewerBadgeInflight),
+  ].filter((key) => key.endsWith(suffix)));
+  for (const [channelName, state] of Object.entries(viewerBadgeBatchState)) {
+    if (state.pending.has(normalizedLoginValue)) keys.add(viewerBadgeKey(channelName, normalizedLoginValue));
+    state.pending.delete(normalizedLoginValue);
+  }
+  for (const key of keys) {
+    viewerBadgeGenerations[key] = (viewerBadgeGenerations[key] || 0) + 1;
+    delete viewerBadgeCache[key];
+    viewerBadgeInflight[key]?.reject(new Error('cache invalidated'));
+    delete viewerBadgeInflight[key];
+    cleanupViewerBadgeGeneration(key);
+  }
 }
 
 async function flushViewerBadgeBatch(channelName: string): Promise<void> {
@@ -228,23 +288,40 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
 
 async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): Promise<void> {
   console.info(LOG_PREFIX, 'flush batch', { channelName, count: logins.length });
+  const generations = Object.fromEntries(
+    logins.map((login) => {
+      const key = viewerBadgeKey(channelName, login);
+      holdViewerBadgeGeneration(key);
+      return [key, viewerBadgeGenerations[key] || 0];
+    }),
+  );
 
   try {
     const payload = await fetchChannelBadges(channelName, logins);
     if (!payload) throw new Error('FETCH_CHANNEL_BADGES failed');
-    if (payload.font_presets) Object.assign(fontPresets, payload.font_presets);
+    const wholeBatchIsCurrent = logins.every((login) => {
+      const key = viewerBadgeKey(channelName, login);
+      return (viewerBadgeGenerations[key] || 0) === generations[key];
+    });
+    // font_presets is shared by the whole compact response. If even one viewer
+    // became stale, applying the shared map could overwrite a newer realtime
+    // preset for that viewer; current viewers can still accept their own data.
+    if (wholeBatchIsCurrent && payload.font_presets) channelStyles.assignFontPresets(channelName, payload.font_presets);
     for (const login of logins) {
+      const key = viewerBadgeKey(channelName, login);
+      if ((viewerBadgeGenerations[key] || 0) !== generations[key]) continue;
       const viewer = payload.viewers?.[login] || payload.viewers?.[normalizeLogin(login)] || null;
       const badges = normalizeViewerBadges(payload, login);
-      cacheViewerStyle(login, viewer as Record<string, unknown> | null);
+      cacheViewerStyle(channelName, login, viewer as Record<string, unknown> | null);
       cacheViewerBadges(channelName, login, badges);
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
-      delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      viewerBadgeInflight[key]?.resolve(badges);
+      delete viewerBadgeInflight[key];
     }
   } catch {
     console.warn(LOG_PREFIX, 'batch fetch failed', { channelName, count: logins.length });
     for (const login of logins) {
       const key = viewerBadgeKey(channelName, login);
+      if ((viewerBadgeGenerations[key] || 0) !== generations[key]) continue;
       // Негативная запись подавляет повторные запросы на 30 секунд, но помечена
       // как negative: сбой не выдаётся за подтверждённое отсутствие бейджей.
       viewerBadgeCache[key] = {
@@ -257,6 +334,8 @@ async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): 
       viewerBadgeInflight[key]?.reject(new Error('badges unavailable'));
       delete viewerBadgeInflight[key];
     }
+  } finally {
+    for (const login of logins) releaseViewerBadgeGeneration(viewerBadgeKey(channelName, login));
   }
 }
 
@@ -301,7 +380,7 @@ function resolveBadgesForLogin(channelName: string | null, login: string, force 
 
 const tributeContext = {
   getCurrentChannel: () => currentChannelName,
-  getCachedUser: (login: string) => cachedUsers[normalizeLogin(login)],
+  getCachedUser: (login: string) => channelStyles.usersFor(currentChannelName)[normalizeLogin(login)],
   resolveBadgesForLogin,
 };
 
@@ -325,7 +404,7 @@ async function fetchBadges(channelName: string, logins = collectVisibleLogins(),
   if (forceRefresh) {
     for (const login of pending) {
       invalidateViewerBadgeCache(channelName, login);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
     }
   }
   try {
@@ -484,13 +563,10 @@ function resetChannelState(clearCache = true): void {
   initialFetchSucceeded = false;
   if (socket) socket.disconnect();
   socket = null;
-  for (const key of Object.keys(cachedUsers)) delete cachedUsers[key];
-  for (const key of Object.keys(fontPresets)) delete fontPresets[key];
   if (clearCache && currentChannelName) invalidateViewerBadgeCache(currentChannelName);
   hiddenMessageQueue.clear();
   softReprocessGeneration += 1;
   hiddenFlushGeneration += 1;
-  scheduleDynamicStyles();
 }
 
 function initSocket(channelName: string): void {
@@ -560,6 +636,8 @@ function initSocket(channelName: string): void {
     if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
     if (msg.type === 'channel_refresh') {
       console.info(LOG_PREFIX, 'channel refresh', { channelName });
+      channelStyles.clearChannel(channelName);
+      scheduleDynamicStyles();
       invalidateViewerBadgeCache(channelName);
       browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
       if (channelRefreshTimer) return;
@@ -567,6 +645,17 @@ function initSocket(channelName: string): void {
         channelRefreshTimer = null;
         void fetchBadges(channelName);
       }, Math.random() * 5000);
+      return;
+    }
+    if (msg.type === 'viewer_refresh') {
+      const login = normalizeLogin(msg.data?.viewer);
+      if (!login) return;
+      console.info(LOG_PREFIX, 'viewer refresh', { channelName, login });
+      channelStyles.clearViewerEverywhere(login);
+      scheduleDynamicStyles();
+      invalidateViewerBadgeEverywhere(login);
+      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
+      refreshUserInChat(login);
       return;
     }
     if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
@@ -577,10 +666,14 @@ function initSocket(channelName: string): void {
       login,
       badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
       tra: Array.isArray(msg.data.tra_badges) ? msg.data.tra_badges.length : 0,
+      collectible: Array.isArray(msg.data.collectible_badges) ? msg.data.collectible_badges.length : 0,
       tsr: Array.isArray(msg.data.tsr_badges) ? msg.data.tsr_badges.length : 0,
     });
-    if (msg.data.font_presets) Object.assign(fontPresets, msg.data.font_presets);
-    cachedUsers[login] = { ...(cachedUsers[login] || {}), ...(msg.data as ViewerConfig) };
+    const key = viewerBadgeKey(channelName, login);
+    incrementViewerBadgeGeneration(channelName, login);
+    getBatchState(channelName).pending.delete(login);
+    if (msg.data.font_presets) channelStyles.assignFontPresets(channelName, msg.data.font_presets);
+    cacheViewerStyle(channelName, login, msg.data);
     if (Array.isArray(msg.data.badge_ids) && msg.data.badges && typeof msg.data.badges === 'object') {
       const badges = normalizeViewerBadges({
         badges: msg.data.badges,
@@ -589,8 +682,9 @@ function initSocket(channelName: string): void {
         },
       }, login);
       cacheViewerBadges(channelName, login, badges);
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
-      delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      viewerBadgeInflight[key]?.resolve(badges);
+      delete viewerBadgeInflight[key];
+      cleanupViewerBadgeGeneration(key);
       browser.runtime.sendMessage({
         type: 'UPSERT_TRIBUTE_BADGE_CACHE',
         channelLogin: channelName,
@@ -602,8 +696,9 @@ function initSocket(channelName: string): void {
     } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
       const badges = normalizeViewerBadges(msg.data);
       cacheViewerBadges(channelName, login, badges);
-      viewerBadgeInflight[viewerBadgeKey(channelName, login)]?.resolve(badges);
-      delete viewerBadgeInflight[viewerBadgeKey(channelName, login)];
+      viewerBadgeInflight[key]?.resolve(badges);
+      delete viewerBadgeInflight[key];
+      cleanupViewerBadgeGeneration(key);
       browser.runtime.sendMessage({
         type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
         channelLogin: channelName,
@@ -613,7 +708,6 @@ function initSocket(channelName: string): void {
       invalidateViewerBadgeCache(channelName, login);
       browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
     }
-    scheduleDynamicStyles();
     refreshUserInChat(login);
   });
 
@@ -851,13 +945,15 @@ function checkUrlChange(): void {
   lastUrl = location.href;
   const newChannel = extractChannelName();
   if (!newChannel) {
-    currentChannelName = null;
     resetChannelState(false);
+    currentChannelName = null;
+    scheduleDynamicStyles();
     return;
   }
   if (newChannel !== currentChannelName) {
     resetChannelState();
     currentChannelName = newChannel;
+    scheduleDynamicStyles();
     startStartupScan(newChannel);
     initSocket(newChannel);
   }

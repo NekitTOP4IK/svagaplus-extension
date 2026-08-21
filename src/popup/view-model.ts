@@ -30,6 +30,7 @@ export interface PopupView {
   telegramText: string;
   telegramLinked: boolean;
   socialRatingEnabled: boolean;
+  customNicknamesEnabled: boolean;
   banner: PopupErrorBanner | null;
 }
 
@@ -77,6 +78,7 @@ export function derivePopupView(state: PopupState): PopupView {
     telegramText: telegramLinked ? 'Telegram подключен' : 'Telegram не подключен',
     telegramLinked,
     socialRatingEnabled: state.settings.socialRatingEnabled,
+    customNicknamesEnabled: state.settings.customNicknamesEnabled,
     banner: state.banner,
   };
 }

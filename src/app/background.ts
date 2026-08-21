@@ -57,6 +57,7 @@ const LOGIN_RE = /^[a-z0-9_]{3,25}$/;
 const MAX_ALIAS_LENGTH = 64;
 const MAX_IMPORT_ALIASES = 1000;
 const CHANNEL_BADGES_CACHE_TTL_MS = 10 * 60 * 1000;
+const CHANNEL_BADGES_REQUEST_TIMEOUT_MS = 10_000;
 
 type ChannelBadgeViewerEntry = {
   expiresAt: number;
@@ -68,13 +69,22 @@ type ChannelBadgesResponse = {
   badges: Record<string, unknown>;
   font_presets: Record<string, unknown>;
   viewers: Record<string, unknown>;
+  stale?: true;
+};
+
+type ChannelBadgeViewerInflightEntry = {
+  request: Promise<ChannelBadgesResponse>;
+  generationSnapshot: Map<string, number>;
 };
 
 const channelBadgeViewersCache = new Map<string, ChannelBadgeViewerEntry>();
+const channelBadgeViewerIndex = new Map<string, Set<string>>();
 const channelBadgeAssetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeFontPresetsCache = new Map<string, { expiresAt: number; data: unknown }>();
 const channelBadgeInflight = new Map<string, Promise<ChannelBadgesResponse>>();
-const channelBadgeViewerInflight = new Map<string, Promise<ChannelBadgesResponse>>();
+const channelBadgeViewerInflight = new Map<string, ChannelBadgeViewerInflightEntry>();
+const channelBadgeGenerations = new Map<string, number>();
+const channelBadgeGenerationSnapshotRefs = new Map<string, number>();
 const channelBadgeFetchBatches = new Map<string, {
   pending: Set<string>;
   timer: ReturnType<typeof setTimeout> | null;
@@ -105,6 +115,91 @@ function badRequest(): Promise<{ ok: false; error: 'bad_request' }> {
 
 function channelViewerKey(channelLogin: string, login: string): string {
   return `${channelLogin}:${login}`;
+}
+
+function normalizedChannelViewerKey(channelLogin: string, login: string): string {
+  return channelViewerKey(channelLogin.trim().toLowerCase(), login.trim().toLowerCase());
+}
+
+function channelBadgeGeneration(channelLogin: string, login: string): number {
+  return channelBadgeGenerations.get(normalizedChannelViewerKey(channelLogin, login)) ?? 0;
+}
+
+function bumpChannelBadgeGeneration(channelLogin: string, login: string): void {
+  const key = normalizedChannelViewerKey(channelLogin, login);
+  if ((channelBadgeGenerationSnapshotRefs.get(key) ?? 0) > 0) {
+    channelBadgeGenerations.set(key, channelBadgeGeneration(channelLogin, login) + 1);
+  } else {
+    channelBadgeGenerations.delete(key);
+  }
+  channelBadgeViewerInflight.delete(key);
+}
+
+function channelBadgeGenerationSnapshot(channelLogin: string, logins: string[]): Map<string, number> {
+  return new Map(logins.map((login) => [login, channelBadgeGeneration(channelLogin, login)]));
+}
+
+function retainChannelBadgeGenerationSnapshot(
+  channelLogin: string,
+  snapshot: Map<string, number>,
+): void {
+  for (const login of snapshot.keys()) {
+    const key = normalizedChannelViewerKey(channelLogin, login);
+    channelBadgeGenerationSnapshotRefs.set(key, (channelBadgeGenerationSnapshotRefs.get(key) ?? 0) + 1);
+  }
+}
+
+function releaseChannelBadgeGenerationSnapshot(
+  channelLogin: string,
+  snapshot: Map<string, number>,
+): void {
+  for (const login of snapshot.keys()) {
+    const key = normalizedChannelViewerKey(channelLogin, login);
+    const refs = channelBadgeGenerationSnapshotRefs.get(key) ?? 0;
+    if (refs <= 1) {
+      channelBadgeGenerationSnapshotRefs.delete(key);
+      channelBadgeGenerations.delete(key);
+    } else {
+      channelBadgeGenerationSnapshotRefs.set(key, refs - 1);
+    }
+  }
+}
+
+function isChannelBadgeGenerationCurrent(
+  channelLogin: string,
+  snapshot: Map<string, number>,
+): boolean {
+  for (const [login, generation] of snapshot) {
+    if (channelBadgeGeneration(channelLogin, login) !== generation) return false;
+  }
+  return true;
+}
+
+function staleChannelBadgesResponse(): ChannelBadgesResponse {
+  return { ok: false, badges: {}, font_presets: {}, viewers: {}, stale: true };
+}
+
+function cacheViewerEntry(channelLogin: string, login: string, entry: ChannelBadgeViewerEntry): void {
+  const normalizedChannel = channelLogin.toLowerCase();
+  const normalizedLogin = login.toLowerCase();
+  const key = channelViewerKey(normalizedChannel, normalizedLogin);
+  channelBadgeViewersCache.set(key, entry);
+  let keys = channelBadgeViewerIndex.get(normalizedLogin);
+  if (!keys) {
+    keys = new Set<string>();
+    channelBadgeViewerIndex.set(normalizedLogin, keys);
+  }
+  keys.add(key);
+}
+
+function deleteViewerEntry(key: string): void {
+  channelBadgeViewersCache.delete(key);
+  const separator = key.indexOf(':');
+  if (separator < 0) return;
+  const login = key.slice(separator + 1);
+  const keys = channelBadgeViewerIndex.get(login);
+  keys?.delete(key);
+  if (keys?.size === 0) channelBadgeViewerIndex.delete(login);
 }
 
 function emptyChannelBadgesResponse(logins: string[]): ChannelBadgesResponse {
@@ -171,12 +266,10 @@ function getCachedChannelBadges(channelLogin: string, logins: string[], requireA
   // - до запроса («есть ли в кэше полный ответ?») — строго. Раньше хватало
   //   одного закэшированного логина из N, вызывающий коротко замыкался,
   //   и остальные оставались без бейджей на весь TTL.
-  // - после запроса («отдай что есть») — нестрого. cacheChannelBadges кладёт
-  //   только тех, кого вернул бэкенд, а чаттеров без подписки он не возвращает.
-  //   Строгая проверка здесь давала null почти всегда, content-скрипт получал
-  //   ok:false, травил негативный кэш всему чанку и защёлкивал сообщения
-  //   в состояние 'empty' — навсегда, потому что shouldSkipBadgeRender
-  //   больше их не переобрабатывает.
+  // - после успешного запроса («отдай что есть») — нестрого. cacheChannelBadges
+  //   материализует пропущенных бэкендом запрошенных чаттеров как authoritative
+  //   empty, поэтому они считаются свежими на TTL. Нестрогий fallback сохраняет
+  //   ранее доступные данные, если запрос завершился ошибкой или частично.
   if (requireAll && (!allFresh || Object.keys(viewers).length !== logins.length)) return null;
   return { ok: true, badges, font_presets, viewers };
 }
@@ -193,13 +286,17 @@ export function __fetchChannelBadges(channelLogin: string, logins: string[], for
 
 /** Только для тестов. */
 export function __seedChannelViewer(channelLogin: string, login: string, data: Record<string, unknown>): void {
-  channelBadgeViewersCache.set(channelViewerKey(channelLogin, login), {
+  cacheViewerEntry(channelLogin, login, {
     expiresAt: Date.now() + 600_000,
     data: data as never,
   });
 }
 
-function cacheChannelBadges(channelLogin: string, response: ChannelBadgesResponse): void {
+function cacheChannelBadges(
+  channelLogin: string,
+  response: ChannelBadgesResponse,
+  requestedLogins: string[] = Object.keys(response.viewers),
+): void {
   if (!response.ok) return;
   const expiresAt = Date.now() + CHANNEL_BADGES_CACHE_TTL_MS;
 
@@ -211,18 +308,15 @@ function cacheChannelBadges(channelLogin: string, response: ChannelBadgesRespons
     channelBadgeFontPresetsCache.set(fontPresetId, { expiresAt, data: fontPreset });
   }
 
-  for (const [login, viewer] of Object.entries(response.viewers)) {
-    const viewerData = isRecord(viewer) ? { ...viewer } : {};
-    const badgeIds = Array.isArray((viewer as { badge_ids?: unknown[] }).badge_ids)
-      ? ((viewer as { badge_ids: unknown[] }).badge_ids)
+  for (const login of requestedLogins) {
+    const viewer = response.viewers[login] ?? response.viewers[login.toLowerCase()];
+    const viewerData: Record<string, unknown> = isRecord(viewer) ? { ...viewer } : { badge_ids: [] };
+    viewerData.badge_ids = Array.isArray(viewerData.badge_ids)
+      ? viewerData.badge_ids
         .map((badgeId) => (typeof badgeId === 'string' || typeof badgeId === 'number' ? String(badgeId) : ''))
         .filter(Boolean)
       : [];
-    viewerData.badge_ids = badgeIds;
-    channelBadgeViewersCache.set(channelViewerKey(channelLogin, login.toLowerCase()), {
-      expiresAt,
-      data: viewerData,
-    });
+    cacheViewerEntry(channelLogin, login, { expiresAt, data: viewerData });
   }
 }
 
@@ -242,7 +336,7 @@ function upsertChannelBadgeViewer(
         .filter(Boolean)
     : [];
   viewerData.badge_ids = badgeIds;
-  channelBadgeViewersCache.set(channelViewerKey(channelLogin, normalizedLogin), {
+  cacheViewerEntry(channelLogin, normalizedLogin, {
     expiresAt,
     data: viewerData,
   });
@@ -264,49 +358,72 @@ async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: st
     return emptyChannelBadgesResponse(logins);
   }
 
-  const requestKey = `${channelLogin}:${logins.join(',')}`;
+  const generationSnapshot = channelBadgeGenerationSnapshot(channelLogin, logins);
+  const requestKey = `${channelLogin}:${logins
+    .map((login) => `${login}@${generationSnapshot.get(login) ?? 0}`)
+    .join(',')}`;
   const inflight = channelBadgeInflight.get(requestKey);
   if (inflight) return inflight;
 
+  retainChannelBadgeGenerationSnapshot(channelLogin, generationSnapshot);
   let request!: Promise<ChannelBadgesResponse>;
   request = (async (): Promise<ChannelBadgesResponse> => {
     try {
-      const params = new URLSearchParams({ viewers: logins.join(',') });
-      const res = await fetch(`${BACKEND_URL}/api/v3/channels/${encodeURIComponent(channelLogin)}/badges?${params.toString()}`);
-      if (!res.ok) {
-        apiCooldown.markFromStatus(coolKey, res.status);
-        const empty = emptyChannelBadgesResponse(logins);
-        // cacheChannelBadges only stores when ok:true — empty has ok:true
-        if (res.status === 404) {
-          cacheChannelBadges(channelLogin, empty);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), CHANNEL_BADGES_REQUEST_TIMEOUT_MS);
+      try {
+        const params = new URLSearchParams({ viewers: logins.join(',') });
+        const res = await fetch(
+          `${BACKEND_URL}/api/v3/channels/${encodeURIComponent(channelLogin)}/badges?${params.toString()}`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) {
+          if (!isChannelBadgeGenerationCurrent(channelLogin, generationSnapshot)) {
+            return staleChannelBadgesResponse();
+          }
+          apiCooldown.markFromStatus(coolKey, res.status);
+          const empty = emptyChannelBadgesResponse(logins);
+          // cacheChannelBadges only stores when ok:true — empty has ok:true
+          if (res.status === 404) {
+            cacheChannelBadges(channelLogin, empty, logins);
+          }
+          return empty;
         }
-        return empty;
+        const payload = await res.json();
+        const data = payload?.data ?? payload;
+        const response = {
+          ok: true,
+          badges: data?.badges && typeof data.badges === 'object' ? data.badges : {},
+          font_presets: data?.font_presets && typeof data.font_presets === 'object' ? data.font_presets : {},
+          viewers: data?.viewers && typeof data.viewers === 'object' ? data.viewers : {},
+        };
+        if (!isChannelBadgeGenerationCurrent(channelLogin, generationSnapshot)) {
+          return staleChannelBadgesResponse();
+        }
+        cacheChannelBadges(channelLogin, response, logins);
+        return response;
+      } finally {
+        clearTimeout(timeout);
       }
-      const payload = await res.json();
-      const data = payload?.data ?? payload;
-      const response = {
-        ok: true,
-        badges: data?.badges && typeof data.badges === 'object' ? data.badges : {},
-        font_presets: data?.font_presets && typeof data.font_presets === 'object' ? data.font_presets : {},
-        viewers: data?.viewers && typeof data.viewers === 'object' ? data.viewers : {},
-      };
-      cacheChannelBadges(channelLogin, response);
-      return response;
     } catch {
+      if (!isChannelBadgeGenerationCurrent(channelLogin, generationSnapshot)) {
+        return staleChannelBadgesResponse();
+      }
       apiCooldown.markFromStatus(coolKey, 'network');
       return emptyChannelBadgesResponse(logins);
     } finally {
       channelBadgeInflight.delete(requestKey);
       for (const login of logins) {
         const key = channelViewerKey(channelLogin, login);
-        if (channelBadgeViewerInflight.get(key) === request) channelBadgeViewerInflight.delete(key);
+        if (channelBadgeViewerInflight.get(key)?.request === request) channelBadgeViewerInflight.delete(key);
       }
+      releaseChannelBadgeGenerationSnapshot(channelLogin, generationSnapshot);
     }
   })();
 
   channelBadgeInflight.set(requestKey, request);
   for (const login of logins) {
-    channelBadgeViewerInflight.set(channelViewerKey(channelLogin, login), request);
+    channelBadgeViewerInflight.set(channelViewerKey(channelLogin, login), { request, generationSnapshot });
   }
   return request;
 }
@@ -326,6 +443,9 @@ async function flushChannelBadgeFetchBatch(channelLogin: string): Promise<void> 
   if (batch.timer) clearTimeout(batch.timer);
   batch.timer = null;
   batch.running = true;
+  if (channelBadgeFetchBatches.get(channelLogin) === batch) {
+    channelBadgeFetchBatches.delete(channelLogin);
+  }
 
   try {
     while (batch.pending.size > 0) {
@@ -340,11 +460,6 @@ async function flushChannelBadgeFetchBatch(channelLogin: string): Promise<void> 
     }
   } finally {
     batch.running = false;
-    if (batch.pending.size > 0 && !batch.timer) {
-      batch.timer = setTimeout(() => void flushChannelBadgeFetchBatch(channelLogin), 0);
-    } else if (batch.pending.size === 0) {
-      channelBadgeFetchBatches.delete(channelLogin);
-    }
   }
 }
 
@@ -388,7 +503,7 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
   if (force) {
     for (const login of normalizedLogins) {
       const key = channelViewerKey(channelLogin, login);
-      channelBadgeViewersCache.delete(key);
+      deleteViewerEntry(key);
     }
   }
 
@@ -401,6 +516,8 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
     return !viewer;
   });
 
+  let networkRounds = 0;
+
   // Different batch shapes can overlap: [alice] may still be fetching when
   // [alice, bob] arrives. The old batch-level key only deduplicated identical
   // arrays, so both requests included alice. Wait for the per-viewer request,
@@ -408,23 +525,50 @@ async function fetchChannelBadges(channelLogin: string, logins: string[], force 
   if (!force) {
     const inFlight = Array.from(new Set(
       missing
-        .map((login) => channelBadgeViewerInflight.get(channelViewerKey(channelLogin, login)))
+        .map((login) => {
+          const key = channelViewerKey(channelLogin, login);
+          const entry = channelBadgeViewerInflight.get(key);
+          if (!entry) return null;
+          if (!isChannelBadgeGenerationCurrent(channelLogin, entry.generationSnapshot)) {
+            if (channelBadgeViewerInflight.get(key) === entry) channelBadgeViewerInflight.delete(key);
+            return null;
+          }
+          return entry.request;
+        })
         .filter((request): request is Promise<ChannelBadgesResponse> => request != null),
     ));
     if (inFlight.length > 0) {
       await Promise.all(inFlight);
+      networkRounds = 1;
       missing = normalizedLogins.filter((login) => !getCachedChannelBadges(channelLogin, [login]));
     }
   }
 
   if (missing.length > 0) {
     const fetched = await queueChannelBadgeFetch(channelLogin, missing);
-    if (!fetched.ok && missing.length === normalizedLogins.length) return fetched;
+    networkRounds += 1;
+    if (fetched.stale) {
+      missing = normalizedLogins.filter((login) => !getCachedChannelBadges(channelLogin, [login]));
+      if (missing.length > 0 && networkRounds < 2) {
+        const refreshed = await queueChannelBadgeFetch(channelLogin, missing);
+        networkRounds += 1;
+        if (refreshed.stale) {
+          return { ok: false, badges: {}, font_presets: {}, viewers: {} };
+        }
+        if (!refreshed.ok && missing.length === normalizedLogins.length) return refreshed;
+      } else if (missing.length > 0) {
+        return { ok: false, badges: {}, font_presets: {}, viewers: {} };
+      }
+    } else if (!fetched.ok && missing.length === normalizedLogins.length) {
+      return fetched;
+    }
   }
 
-  // Нестрого: после запроса частичный ответ — лучшее, что есть. Бэкенд
-  // не возвращает чаттеров без подписки, поэтому полного набора не будет никогда.
-  return getCachedChannelBadges(channelLogin, normalizedLogins, false) ?? { ok: false, badges: {}, font_presets: {}, viewers: {} };
+  // Успешный ответ уже закэшировал каждого запрошенного чаттера, включая
+  // authoritative empty. Неполное покрытие означает transient failure: иначе
+  // content-скрипт принял бы отсутствующих в частичном кэше за authoritative empty.
+  return getCachedChannelBadges(channelLogin, normalizedLogins)
+    ?? { ok: false, badges: {}, font_presets: {}, viewers: {} };
 }
 
 function sanitizeViewerAccount(account: ViewerAccount | null): Omit<ViewerAccount, 'token'> | null {
@@ -656,6 +800,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         if (typeof patch.socialRatingEnabled !== 'boolean') return badRequest();
         nextPatch.socialRatingEnabled = patch.socialRatingEnabled;
       }
+      if ('customNicknamesEnabled' in patch) {
+        if (typeof patch.customNicknamesEnabled !== 'boolean') return badRequest();
+        nextPatch.customNicknamesEnabled = patch.customNicknamesEnabled;
+      }
 
       return setExtensionSettings(nextPatch).then(async (settings) => {
         await broadcastSettingsChanged(settings);
@@ -705,18 +853,41 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
     case 'INVALIDATE_TRIBUTE_BADGE_CACHE': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
       const login = normalizeLogin((message as { login?: unknown }).login);
-      if (!channelLogin) return badRequest();
-      // Remove specific or whole channel from the three Maps
-      const prefix = `${channelLogin}:`;
-      if (login) {
-        const key = `${channelLogin}:${login}`;
-        channelBadgeViewersCache.delete(key);
+      if (!channelLogin && !login) return badRequest();
+      if (channelLogin && login) {
+        bumpChannelBadgeGeneration(channelLogin, login);
+      } else if (login) {
+        const suffix = `:${login}`;
+        const keys = new Set<string>(channelBadgeViewerIndex.get(login) || []);
+        for (const key of channelBadgeViewerInflight.keys()) {
+          if (key.endsWith(suffix)) keys.add(key);
+        }
+        for (const key of keys) {
+          const separator = key.indexOf(':');
+          if (separator >= 0) bumpChannelBadgeGeneration(key.slice(0, separator), login);
+        }
+      } else if (channelLogin) {
+        const prefix = `${channelLogin}:`;
+        const keys = new Set<string>();
+        for (const key of channelBadgeViewersCache.keys()) {
+          if (key.startsWith(prefix)) keys.add(key);
+        }
+        for (const key of channelBadgeViewerInflight.keys()) {
+          if (key.startsWith(prefix)) keys.add(key);
+        }
+        for (const key of keys) bumpChannelBadgeGeneration(channelLogin, key.slice(prefix.length));
+      }
+      if (channelLogin && login) {
+        deleteViewerEntry(channelViewerKey(channelLogin, login));
+      } else if (login) {
+        for (const key of Array.from(channelBadgeViewerIndex.get(login) || [])) deleteViewerEntry(key);
       } else {
-        for (const k of Array.from(channelBadgeViewersCache.keys())) {
-          if (k.startsWith(prefix)) channelBadgeViewersCache.delete(k);
+        const prefix = `${channelLogin}:`;
+        for (const key of Array.from(channelBadgeViewersCache.keys())) {
+          if (key.startsWith(prefix)) deleteViewerEntry(key);
         }
       }
-      apiCooldown.clear(channelBadgesKey(channelLogin));
+      if (channelLogin) apiCooldown.clear(channelBadgesKey(channelLogin));
       return Promise.resolve({ ok: true });
     }
     case 'UPSERT_TRIBUTE_BADGE_CACHE': {

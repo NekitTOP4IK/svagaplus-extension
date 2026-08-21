@@ -130,8 +130,8 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   await wait(50);
 
   assert.ok(
-    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
-    'legacy tra/tsr payload must INVALIDATE BG cache',
+    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'bob' && m.channelLogin === 'olesha'),
+    'legacy tra/tsr payload must INVALIDATE only the current channel cache',
   );
   assert.ok(
     !messages.some((m) => m.type === 'UPSERT_TRIBUTE_BADGE_CACHE' && m.login === 'bob'),
@@ -150,8 +150,8 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   await wait(50);
 
   assert.ok(
-    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'carol'),
-    'unusable payload must INVALIDATE',
+    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'carol' && m.channelLogin === 'olesha'),
+    'unusable payload must INVALIDATE only the current channel cache',
   );
   assert.ok(
     !messages.some((m) => m.type === 'UPSERT_TRIBUTE_BADGE_CACHE' && m.login === 'carol'),
@@ -171,6 +171,14 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   assert.ok(
     !messages.some((m) => m.type === 'UPSERT_TRIBUTE_BADGE_CACHE'),
     'channel_refresh must not UPSERT',
+  );
+
+  messages.length = 0;
+  handlers.badge_update({ type: 'viewer_refresh', data: { viewer: 'alice' } });
+  await wait(50);
+  assert.ok(
+    messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'alice' && !m.channelLogin),
+    'viewer_refresh must invalidate the viewer in every cached channel',
   );
 
   console.log('tribute-ws-upsert: PASS');

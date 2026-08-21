@@ -3,7 +3,7 @@ const assert = require('assert');
 const { derivePopupView } = require('../dist-types/popup/view-model.js');
 const { buildPopupErrorBanner } = require('../dist-types/popup/error-banner.js');
 
-const SETTINGS = { socialRatingEnabled: true };
+const SETTINGS = { socialRatingEnabled: true, customNicknamesEnabled: true };
 const ACCOUNT = {
   twitchLogin: 'nekittop4ik',
   avatarUrl: 'https://cdn.example/avatar.png',
@@ -79,7 +79,10 @@ assert.equal(failed.statusTone, 'error');
 assert.equal(failed.banner.code, 'oauth_cancelled');
 
 // ── 8. Settings pass through so a failed settings:update can roll the switch back.
-const off = derivePopupView(state({ settings: { socialRatingEnabled: false } }));
+const off = derivePopupView(state({
+  settings: { socialRatingEnabled: false, customNicknamesEnabled: false },
+}));
 assert.equal(off.socialRatingEnabled, false);
+assert.equal(off.customNicknamesEnabled, false);
 
 console.log('popup-view-model: PASS (8 checks)');

@@ -1,5 +1,6 @@
 export interface ExtensionSettings {
   socialRatingEnabled: boolean;
+  customNicknamesEnabled: boolean;
 }
 
 export interface ViewerAccount {
@@ -40,13 +41,15 @@ export interface RuntimeChannelState {
 
 export interface V3Badge {
   id: string;
-  source: 'tra' | 'tsr';
+  source: 'tra' | 'collectible' | 'tsr';
   title: string;
   url: string | null;
   kind: string | null;
   rank: number | null;
   periodId: string | null;
   active: boolean;
+  rarity?: 'common' | 'rare' | 'epic' | 'mythic' | string | null;
+  isAnimated?: boolean;
 }
 
 export interface V3ViewerBadges {
@@ -57,6 +60,7 @@ export interface V3ViewerBadges {
   };
   badges: V3Badge[];
   traBadges: V3Badge[];
+  collectibleBadges?: V3Badge[];
   tsrBadges: V3Badge[];
 }
 
