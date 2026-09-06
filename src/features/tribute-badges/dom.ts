@@ -95,6 +95,40 @@ function buildNameCssCompat(config: ViewerConfig): string | null {
   return null;
 }
 
+const NAME_STYLE_PROPERTIES = [
+  'background',
+  '-webkit-background-clip',
+  '-webkit-text-fill-color',
+  'color',
+  '-webkit-text-stroke',
+  'paint-order',
+  'filter',
+] as const;
+
+/** Applies only the server-generated nickname declaration subset and clears it as a unit. */
+export function applyViewerNameStyle(element: HTMLElement, config: ViewerConfig | undefined): void {
+  const nameCss = config?.name_css || (config ? buildNameCssCompat(config) : null);
+  const wasStyled = element.dataset.tcbNameStyle === '1';
+  if (!nameCss) {
+    if (!wasStyled) return;
+    for (const property of NAME_STYLE_PROPERTIES) element.style.removeProperty(property);
+    delete element.dataset.tcbNameStyle;
+    return;
+  }
+
+  // Reset first so a removed glow or stroke cannot survive a later update.
+  for (const property of NAME_STYLE_PROPERTIES) element.style.removeProperty(property);
+  for (const declaration of nameCss.split(';')) {
+    const separator = declaration.indexOf(':');
+    if (separator < 1) continue;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration.slice(separator + 1).trim();
+    if (!value || !NAME_STYLE_PROPERTIES.includes(property as typeof NAME_STYLE_PROPERTIES[number])) continue;
+    element.style.setProperty(property, value, 'important');
+  }
+  element.dataset.tcbNameStyle = '1';
+}
+
 export function updateDynamicStyles(
   cachedUsers: Record<string, ViewerConfig>,
   fontPresets: Record<string, FontPreset>,

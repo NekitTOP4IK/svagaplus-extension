@@ -1,8 +1,9 @@
 import browser from '../shared/browser';
 import { FRONTEND_URL } from '../shared/config';
+import { getChannelLoginFromUrl } from '../shared/twitch';
 import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../shared/types';
 import { buildPopupErrorBanner, type PopupErrorBanner } from './error-banner';
-import { derivePopupView, type AccountView, type PopupState, type UiStatus } from './view-model';
+import { derivePopupView, shouldApplyMetricsResponse, type AccountView, type PopupMetricsState, type PopupRating, type PopupState, type UiStatus } from './view-model';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -36,6 +37,8 @@ type AuthFeedbackResponse = {
   error?: string;
 };
 
+type UserRatingResponse = PopupRating | null;
+
 const DEFAULT_SETTINGS: ExtensionSettings = {
   socialRatingEnabled: true,
   customNicknamesEnabled: true,
@@ -47,11 +50,13 @@ const state: PopupState = {
   account: null,
   settings: DEFAULT_SETTINGS,
   banner: null,
+  metrics: { state: 'idle', channel: null, rating: null },
 };
 
 /** Banner raised by the current interaction; outranks the persisted auth feedback. */
 let transientBanner: PopupErrorBanner | null = null;
 let feedbackBanner: PopupErrorBanner | null = null;
+let metricsRequestGeneration = 0;
 
 function $(id: string): HTMLElement | null {
   return document.getElementById(id);
@@ -137,6 +142,14 @@ function setPopupErrorBanner(error: PopupErrorBanner | null): void {
   $('popupErrorSlot')?.classList.toggle('is-open', !!error);
 }
 
+function setMetrics(metrics: PopupMetricsState): void {
+  state.metrics = metrics;
+}
+
+function formatMetric(value: number | null): string {
+  return value == null ? '—' : new Intl.NumberFormat('ru-RU').format(value);
+}
+
 function render(): void {
   state.banner = transientBanner ?? feedbackBanner;
   const view = derivePopupView(state);
@@ -174,20 +187,72 @@ function render(): void {
   } else {
     setAvatar(null, '');
   }
+
+  setText('metricsState', view.metricsText);
+  setText('metricsChannel', view.metricsChannel ? `· ${view.metricsChannel}` : '');
+  setText('swagScore', formatMetric(view.swagScore));
+  setText('socialScore', formatMetric(view.socialScore));
+  setHidden('metricsValues', view.metricsState !== 'ready');
+  $('metricsPanel')?.classList.toggle('metrics--loading', view.metricsState === 'loading');
+}
+
+async function getActiveChannelLogin(): Promise<string | null> {
+  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+  return getChannelLoginFromUrl(tabs[0]?.url);
+}
+
+async function loadMetrics(accountLogin: string, generation: number): Promise<void> {
+  setMetrics({ state: 'loading', channel: null, rating: null });
+  render();
+  try {
+    const channel = await getActiveChannelLogin();
+    if (!shouldApplyMetricsResponse(metricsRequestGeneration, generation, state.account?.twitchLogin, accountLogin)) return;
+    if (!channel) {
+      setMetrics({ state: 'missing-channel', channel: null, rating: null });
+      render();
+      return;
+    }
+
+    let rating: UserRatingResponse;
+    try {
+      rating = await browser.runtime.sendMessage({ type: 'GET_USER_RATING', channelLogin: channel }) as UserRatingResponse;
+    } catch {
+      if (!shouldApplyMetricsResponse(metricsRequestGeneration, generation, state.account?.twitchLogin, accountLogin)) return;
+      setMetrics({ state: 'error', channel, rating: null });
+      render();
+      return;
+    }
+    if (!shouldApplyMetricsResponse(metricsRequestGeneration, generation, state.account?.twitchLogin, accountLogin)) return;
+    const hasScore = rating?.enabled === true && Number.isSafeInteger(rating.swag_score ?? rating.score);
+    setMetrics({ state: hasScore ? 'ready' : 'unavailable', channel, rating: hasScore ? rating : null });
+    render();
+  } catch {
+    if (!shouldApplyMetricsResponse(metricsRequestGeneration, generation, state.account?.twitchLogin, accountLogin)) return;
+    setMetrics({ state: 'error', channel: null, rating: null });
+    render();
+  }
 }
 
 async function loadState(): Promise<void> {
+  const generation = ++metricsRequestGeneration;
   const [accountRes, settingsRes, feedbackRes] = await Promise.all([
     sendMessage<ViewerAccountResponse>({ type: 'viewer:getAccount' }),
     sendMessage<SettingsResponse>({ type: 'settings:get' }),
     sendMessage<AuthFeedbackResponse>({ type: 'viewer:getAuthFeedback' }),
   ]);
+  if (generation !== metricsRequestGeneration) return;
 
   state.account = accountRes && accountRes.ok ? accountRes.account : null;
   state.settings = settingsRes && settingsRes.ok ? settingsRes.settings : DEFAULT_SETTINGS;
   feedbackBanner = buildPopupErrorBanner(feedbackRes && feedbackRes.ok ? feedbackRes.feedback : null);
   state.hydrated = true;
+  if (!state.account?.twitchLogin) {
+    setMetrics({ state: 'idle', channel: null, rating: null });
+    render();
+    return;
+  }
   render();
+  await loadMetrics(state.account.twitchLogin, generation);
 }
 
 async function connect(): Promise<void> {
@@ -217,9 +282,11 @@ async function connect(): Promise<void> {
 }
 
 async function disconnect(): Promise<void> {
+  metricsRequestGeneration += 1;
   state.uiStatus = 'idle';
   transientBanner = null;
   state.account = null;
+  setMetrics({ state: 'idle', channel: null, rating: null });
   render();
   await sendMessage({ type: 'viewer:disconnect' });
   await loadState();
@@ -281,3 +348,8 @@ function bindEvents(): void {
 bindEvents();
 render();
 void loadState();
+
+browser.tabs.onActivated.addListener(() => { void loadState(); });
+browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.url && tab.active) void loadState();
+});

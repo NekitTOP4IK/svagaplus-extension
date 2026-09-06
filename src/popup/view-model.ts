@@ -8,6 +8,31 @@ export type AccountView = 'loading' | 'connected' | 'disconnected';
 
 export type PrimaryAction = 'connect' | 'settings';
 
+export type RatingViewState = 'idle' | 'loading' | 'ready' | 'missing-channel' | 'unavailable' | 'error';
+
+export interface PopupRating {
+  score?: number;
+  swag_score?: number;
+  social_score?: number;
+  enabled?: boolean;
+}
+
+export interface PopupMetricsState {
+  state: RatingViewState;
+  channel: string | null;
+  rating: PopupRating | null;
+}
+
+/** A popup may outlive an account or tab switch while its metric request is in flight. */
+export function shouldApplyMetricsResponse(
+  currentGeneration: number,
+  responseGeneration: number,
+  currentLogin: string | undefined,
+  requestLogin: string,
+): boolean {
+  return currentGeneration === responseGeneration && currentLogin === requestLogin;
+}
+
 export interface PopupState {
   /** false until the first background round-trip resolves (skeleton is shown). */
   hydrated: boolean;
@@ -15,6 +40,7 @@ export interface PopupState {
   account: Omit<ViewerAccount, 'token'> | null;
   settings: ExtensionSettings;
   banner: PopupErrorBanner | null;
+  metrics?: PopupMetricsState;
 }
 
 export interface PopupView {
@@ -32,6 +58,11 @@ export interface PopupView {
   socialRatingEnabled: boolean;
   customNicknamesEnabled: boolean;
   banner: PopupErrorBanner | null;
+  metricsState: RatingViewState;
+  metricsText: string;
+  metricsChannel: string;
+  swagScore: number | null;
+  socialScore: number | null;
 }
 
 /**
@@ -62,6 +93,18 @@ export function derivePopupView(state: PopupState): PopupView {
   }
 
   const telegramLinked = !!state.account?.telegramLinked;
+  const metrics = state.metrics ?? { state: 'idle' as const, channel: null, rating: null };
+  const swagScore = Number.isSafeInteger(metrics.rating?.swag_score ?? metrics.rating?.score)
+    ? (metrics.rating?.swag_score ?? metrics.rating?.score ?? null)
+    : null;
+  const socialScore = Number.isSafeInteger(metrics.rating?.social_score)
+    ? metrics.rating?.social_score ?? null
+    : null;
+  const metricsText = metrics.state === 'loading' ? 'Загружаем показатели…'
+    : metrics.state === 'missing-channel' ? 'Откройте канал Twitch, чтобы увидеть показатели.'
+      : metrics.state === 'unavailable' ? 'Показатели для этого канала пока недоступны.'
+        : metrics.state === 'error' ? 'Не удалось загрузить показатели.'
+          : metrics.state === 'ready' ? `Канал: ${metrics.channel}` : 'Войдите, чтобы увидеть показатели.';
 
   return {
     statusText,
@@ -80,5 +123,10 @@ export function derivePopupView(state: PopupState): PopupView {
     socialRatingEnabled: state.settings.socialRatingEnabled,
     customNicknamesEnabled: state.settings.customNicknamesEnabled,
     banner: state.banner,
+    metricsState: metrics.state,
+    metricsText,
+    metricsChannel: metrics.channel ?? '',
+    swagScore,
+    socialScore,
   };
 }

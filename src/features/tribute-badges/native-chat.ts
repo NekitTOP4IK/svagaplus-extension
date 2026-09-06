@@ -1,5 +1,5 @@
 import type { Badge, ViewerConfig } from './types';
-import { createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
+import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
 import {
   beginBadgeRender,
   failBadgeRender,
@@ -27,11 +27,12 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
   const username = normalizeLogin(usernameElement.getAttribute('data-a-user') || usernameElement.parentElement?.getAttribute('data-a-user') || usernameElement.textContent);
   if (!username) return;
 
+  usernameElement.dataset.tcbUser = username;
+  applyViewerNameStyle(usernameElement, context.getCachedUser(username));
+
   if (shouldSkipBadgeRender(element, username)) return;
 
   const renderToken = beginBadgeRender(element, username);
-  usernameElement.dataset.tcbUser = username;
-
   if (!usernameElement.dataset.tcbTooltip) {
     usernameElement.dataset.tcbTooltip = '1';
     usernameElement.addEventListener('mouseenter', (event) => showTooltip(event, context.getCachedUser(username)?.name_preset_name));
@@ -69,6 +70,7 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
       }
 
       currentUsernameElement.dataset.tcbUser = username;
+      applyViewerNameStyle(currentUsernameElement, context.getCachedUser(username));
 
       const uniqueBadges = dedupeBadges(badges);
       const currentBadgesContainer = targetElement.querySelector<HTMLElement>('.chat-line__message--badges');

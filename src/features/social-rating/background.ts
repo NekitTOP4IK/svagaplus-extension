@@ -263,20 +263,24 @@ export async function getUserRating(channelLogin: string): Promise<{ score?: num
   if (!userLogin) return null;
   try {
     const url = `${API_V3_SOCIAL_CHANNELS_PATH}/${encodeURIComponent(channelLogin)}/viewers/${encodeURIComponent(userLogin)}/rating`;
-    const res = await apiFetch(url);
+    const authRes = await apiFetchWithAuth(url);
+    if (!authRes) return null;
+    const { res } = authRes;
     if (!res.ok) {
       error('shared', 'getUserRating failed:', res.status, url);
       return null;
     }
     const data = unwrapApiData<any>(await res.json());
-    const swagScore = Number(data.swag_score ?? data.score ?? 0);
-    const socialScore = Number(data.social_score ?? 0);
-    return {
-      score: swagScore,
-      swag_score: swagScore,
-      social_score: socialScore,
-      enabled: data.enabled,
-    };
+    const swagScore = Number(data.swag_score ?? data.score);
+    const socialScore = Number(data.social_score);
+    const rating: { score?: number; swag_score?: number; social_score?: number; enabled?: boolean } = {};
+    if (Number.isSafeInteger(swagScore)) {
+      rating.score = swagScore;
+      rating.swag_score = swagScore;
+    }
+    if (Number.isSafeInteger(socialScore)) rating.social_score = socialScore;
+    if (typeof data.enabled === 'boolean') rating.enabled = data.enabled;
+    return rating;
   } catch (e) {
     error('shared', 'getUserRating network error:', e);
     return null;

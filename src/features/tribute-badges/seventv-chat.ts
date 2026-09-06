@@ -1,4 +1,4 @@
-import { createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
+import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
 import type { Badge, ViewerConfig } from './types';
 import {
   beginBadgeRender,
@@ -30,11 +30,12 @@ export function processSevenTVMessage(messageElement: Element, context: SevenTVC
   const username = normalizeLogin(intlMatch ? intlMatch[1] : rawText);
   if (!username) return;
 
+  userBlock.dataset.tcbUser = username;
+  applyViewerNameStyle(usernameEl, context.getCachedUser(username));
+
   if (shouldSkipBadgeRender(element, username)) return;
 
   const renderToken = beginBadgeRender(element, username);
-  userBlock.dataset.tcbUser = username;
-
   if (!usernameEl.dataset.tcbTooltip) {
     usernameEl.dataset.tcbTooltip = '1';
     usernameEl.addEventListener('mouseenter', (event) => showTooltip(event, context.getCachedUser(username)?.name_preset_name));
@@ -73,6 +74,7 @@ export function processSevenTVMessage(messageElement: Element, context: SevenTVC
       }
 
       currentUserBlock.dataset.tcbUser = username;
+      applyViewerNameStyle(currentUsernameEl, context.getCachedUser(username));
 
       const uniqueBadges = dedupeBadges(badges);
       currentUserBlock.querySelectorAll('.tcb-badge-img, .tcb-badge-list-stv').forEach((badge) => badge.remove());

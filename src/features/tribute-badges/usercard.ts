@@ -1,4 +1,4 @@
-import { createBadgeImg, dedupeBadges, normalizeLogin } from './dom';
+import { applyViewerNameStyle, createBadgeImg, dedupeBadges, normalizeLogin } from './dom';
 import type { Badge, ViewerConfig } from './types';
 import {
   beginBadgeRender,
@@ -54,6 +54,8 @@ export function processUserCard(card: Element, context: UserCardContext): void {
   const username = resolveCardLogin(cardEl, targetNameEl, rawText);
   if (!username) return;
 
+  if (targetNameEl) applyViewerNameStyle(targetNameEl, context.getCachedUser(username));
+
   if (shouldSkipBadgeRender(cardEl, username)) return;
 
   const renderToken = beginBadgeRender(cardEl, username);
@@ -72,6 +74,7 @@ export function processUserCard(card: Element, context: UserCardContext): void {
         failBadgeRender(cardEl, username, renderToken);
         return;
       }
+      applyViewerNameStyle(currentTargetNameEl, context.getCachedUser(username));
 
       const uniqueBadges = dedupeBadges(badges);
       const sevTVBadgeContainer = cardEl.querySelector<HTMLElement>('.seventv-user-card-badges');
@@ -102,14 +105,4 @@ export function processUserCard(card: Element, context: UserCardContext): void {
       failBadgeRender(cardEl, username, renderToken);
     }
   })();
-
-  const config = context.getCachedUser(username);
-  if (targetNameEl && config?.name_gradient) {
-    targetNameEl.style.setProperty('background', config.name_gradient, 'important');
-    targetNameEl.style.setProperty('-webkit-background-clip', 'text', 'important');
-    targetNameEl.style.setProperty('-webkit-text-fill-color', 'transparent', 'important');
-    targetNameEl.style.setProperty('color', 'transparent', 'important');
-  } else if (targetNameEl && config?.name_color) {
-    targetNameEl.style.setProperty('color', config.name_color, 'important');
-  }
 }
