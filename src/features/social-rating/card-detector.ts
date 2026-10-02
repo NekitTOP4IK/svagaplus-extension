@@ -1,12 +1,14 @@
 import { RatingData } from './types';
 
 export interface DetectedCard {
-  type: 'twitch' | 'seventv';
+  /** `modview` — панель «Сообщество» режима модератора: только алиасы, без рейтинга и баджей. */
+  type: 'twitch' | 'seventv' | 'modview';
   login: string;
   element: Element;
 }
 
 const SEVENTV_CARD_SELECTOR = '.seventv-user-card, .seventv-usercard';
+export const MODVIEW_CARD_SELECTOR = '[data-a-target="mod-view-user-details"]';
 const SEVENTV_USERTAG_SELECTOR = [
   'a.seventv-user-card-usertag[href]',
   'a.seventv-usercard-usertag[href]',
@@ -35,6 +37,12 @@ function extractTwitchLogin(cardEl: Element): string | null {
   return null;
 }
 
+function extractModViewLogin(cardEl: Element): string | null {
+  const href = cardEl.querySelector('.viewer-card-header__display-name a[href]')?.getAttribute('href') ?? '';
+  const m = href.match(/^\/([a-z0-9_]+)\/?$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
 function findTwitchLayer(element: Element): Element | null {
   // Match any element whose class includes 'viewer-card-layer' (handles BEM variants like
   // viewer-card-layer__draggable, viewer-card-layer-wrapper, etc.)
@@ -53,6 +61,14 @@ export function detectCardLogin(element: Element): DetectedCard | null {
   if (seventvCard) {
     const login = extractSevenTVLogin(seventvCard);
     if (login) return { type: 'seventv', login, element: seventvCard };
+  }
+
+  const modViewCard =
+    element.closest(MODVIEW_CARD_SELECTOR) ??
+    element.querySelector(MODVIEW_CARD_SELECTOR);
+  if (modViewCard) {
+    const login = extractModViewLogin(modViewCard);
+    if (login) return { type: 'modview', login, element: modViewCard };
   }
 
   // Native Twitch: any viewer-card-layer variant must have children (card is rendered)

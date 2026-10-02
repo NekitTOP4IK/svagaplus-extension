@@ -1,7 +1,7 @@
 import { debug } from './logger';
 import { BACKEND_URL } from '../../shared/config';
 import { extractCurrentChannel } from './channel';
-import { detectCardLogin } from './card-detector';
+import { MODVIEW_CARD_SELECTOR, detectCardLogin, type DetectedCard } from './card-detector';
 import { injectBadge, updateBadgeScore, refreshOpenCardAwards } from './cards';
 import { fetchRating, prefetchChannelBadgeGrants, refreshChannelBadgeGrants } from './api';
 import { connectWebSocket, disconnectWebSocket } from './ws';
@@ -43,8 +43,8 @@ function getCurrentChannel(): string {
 }
 
 const processing = new WeakSet<Element>();
-const CARD_SELECTOR = '[class*="viewer-card-layer"], .seventv-user-card, .seventv-usercard';
-const CARD_REAPPLY_SELECTOR = '.seventv-user-card, .seventv-usercard, .viewer-card, [class*="viewer-card-layer"]';
+const CARD_SELECTOR = `[class*="viewer-card-layer"], .seventv-user-card, .seventv-usercard, ${MODVIEW_CARD_SELECTOR}`;
+const CARD_REAPPLY_SELECTOR = `.seventv-user-card, .seventv-usercard, .viewer-card, [class*="viewer-card-layer"], ${MODVIEW_CARD_SELECTOR}`;
 const CARD_LIVE_SECTION_SELECTOR = '.seventv-usercard-tabs';
 const ALIASED_SELECTOR = '[data-tsr-aliased]';
 const NAME_SELECTOR = [
@@ -75,11 +75,33 @@ function isCardMutationNode(el: Element): boolean {
     el.querySelector(CARD_SELECTOR) != null;
 }
 
+function injectAliasControls(card: DetectedCard): void {
+  injectCardAliasControls(
+    card.element,
+    card.login,
+    async (login, alias) => {
+      await setAlias(login, alias);
+      scheduleBatchReapply();
+      refreshOpenCardAliases();
+    },
+    async (login) => {
+      await removeAlias(login);
+      scheduleBatchReapply();
+      refreshOpenCardAliases();
+    },
+  );
+}
+
 async function handleElement(el: Element): Promise<void> {
   const card = detectCardLogin(el);
   if (!card) return;
 
+  // Алиасы локальные: кнопка не должна зависеть от того, ответил ли сервер рейтинга.
   applyAliasesToViewerCard(card.element, card.login);
+  injectAliasControls(card);
+
+  // Панель модератора — рабочий инструмент: только алиас, без рейтинга и сетевых запросов.
+  if (card.type === 'modview') return;
 
   if (processing.has(card.element)) return;
   processing.add(card.element);
@@ -90,22 +112,6 @@ async function handleElement(el: Element): Promise<void> {
     debug('content', 'handleElement rating=', rating);
     if (rating === null) return;
     await injectBadge(card, rating, channel);
-
-    injectCardAliasControls(
-      card.element,
-      card.login,
-      async (login, alias) => {
-        await setAlias(login, alias);
-        scheduleBatchReapply();
-        refreshOpenCardAliases();
-      },
-      async (login) => {
-        await removeAlias(login);
-        scheduleBatchReapply();
-        refreshOpenCardAliases();
-      },
-    );
-
     applyAliasesToViewerCard(card.element, card.login);
   } finally {
     processing.delete(card.element);
@@ -121,20 +127,7 @@ function refreshOpenCardAliases(): void {
 
     applyAliasesToViewerCard(detected.element, detected.login);
     removeCardAliasControls(detected.element);
-    injectCardAliasControls(
-      detected.element,
-      detected.login,
-      async (login, alias) => {
-        await setAlias(login, alias);
-        scheduleBatchReapply();
-        refreshOpenCardAliases();
-      },
-      async (login) => {
-        await removeAlias(login);
-        scheduleBatchReapply();
-        refreshOpenCardAliases();
-      },
-    );
+    injectAliasControls(detected);
   });
 }
 
@@ -296,20 +289,7 @@ function observe(): void {
 
           applyAliasesToViewerCard(detected.element, detected.login);
           if (!detected.element.querySelector('[data-tsr-alias-controls]')) {
-            injectCardAliasControls(
-              detected.element,
-              detected.login,
-              async (login, alias) => {
-                await setAlias(login, alias);
-                scheduleBatchReapply();
-                refreshOpenCardAliases();
-              },
-              async (login) => {
-                await removeAlias(login);
-                scheduleBatchReapply();
-                refreshOpenCardAliases();
-              },
-            );
+            injectAliasControls(detected);
           }
         }
       });

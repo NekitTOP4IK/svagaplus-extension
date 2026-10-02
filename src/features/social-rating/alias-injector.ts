@@ -493,6 +493,10 @@ export function applyAliasesToViewerCard(cardEl: Element, login: string): void {
     if (nameEl) rewriteText(nameEl, login);
   }
 
+  // Новая (Svelte) карточка 7TV: имя — обычный span без ссылки.
+  const seventvDisplayName = cardEl.querySelector('.seventv-usercard-display-name');
+  if (seventvDisplayName) rewriteText(seventvDisplayName, login);
+
   const timelineList = cardEl.querySelector('.seventv-user-card-message-timeline-list');
   if (timelineList) {
     applyAliasesToSevenTVMentionTokens(timelineList);
@@ -522,7 +526,7 @@ export function applyAliasesToViewerCard(cardEl: Element, login: string): void {
 }
 
 export function applyAliasesToOpenCards(): void {
-  document.querySelectorAll('[class*="viewer-card-layer"], .viewer-card, .seventv-user-card').forEach((el) => {
+  document.querySelectorAll('[class*="viewer-card-layer"], .viewer-card, .seventv-user-card, .seventv-usercard, [data-a-target="mod-view-user-details"]').forEach((el) => {
     const detected = detectCardLogin(el);
     if (detected) {
       applyAliasesToViewerCard(detected.element, detected.login);
@@ -771,6 +775,12 @@ export function injectCardAliasControls(
       nameEl = chatUser.querySelector('.seventv-chat-user-username');
       if (nameEl) btnContainer = chatUser;
     }
+  }
+
+  const seventvDisplayName = cardEl.querySelector('.seventv-usercard-display-name');
+  if (seventvDisplayName) {
+    nameEl = seventvDisplayName;
+    btnContainer = seventvDisplayName.parentElement;
   }
 
   if (!nameEl || !btnContainer) return;
