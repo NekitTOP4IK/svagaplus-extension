@@ -820,6 +820,122 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   Aliases
+   -------------------------------------------------------------------------- */
+
+.button--small {
+  min-height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+.alias-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.alias-list {
+  max-height: 168px;
+  margin: 0 -4px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.alias-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 2px 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.alias-row:hover {
+  background: var(--surface-hover);
+}
+
+.alias-login {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alias-arrow {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.alias-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alias-delete {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+
+.alias-delete:hover:not(:disabled),
+.alias-delete:focus-visible {
+  color: var(--danger);
+  background: rgba(255, 122, 122, 0.1);
+  outline: none;
+}
+
+.alias-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 11px;
+}
+
+.alias-actions > .button--text {
+  margin-left: auto;
+}
+
+.alias-status {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.alias-status--ok {
+  color: var(--ok);
+}
+
+.alias-status--error {
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
    Accessibility / motion preferences
    -------------------------------------------------------------------------- */
 

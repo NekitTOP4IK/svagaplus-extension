@@ -721,6 +721,20 @@ export async function importAliases(
   return { ok: true, imported };
 }
 
+// Service worker MV3 просыпается на каждое сообщение после простоя, и каждый раз
+// зовёт validateStoredAccount. Без порога синхронизация шла бы десятки раз в час.
+export const ALIAS_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1000;
+
+/** Синхронизирует алиасы, если с прошлой успешной синхронизации прошло больше `minIntervalMs`. */
+export async function syncAliasesIfStale(
+  minIntervalMs = ALIAS_SYNC_MIN_INTERVAL_MS,
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  const { accessToken, aliasesSyncedAt } = await getStored();
+  if (!accessToken) return { ok: false, error: 'not_authenticated' };
+  if (aliasesSyncedAt && Date.now() - aliasesSyncedAt < minIntervalMs) return { ok: true, skipped: true };
+  return syncAliasesWithServer();
+}
+
 export async function syncAliasesWithServer(): Promise<{ ok: boolean; error?: string }> {
   try {
     const authRes = await apiFetchWithAuth('/api/v3/social/aliases');

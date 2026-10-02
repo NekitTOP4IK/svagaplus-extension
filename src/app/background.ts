@@ -29,6 +29,7 @@ import {
   prefetchChannelBadgeGrants,
   refreshMe,
   setAlias,
+  syncAliasesIfStale,
   syncAliasesWithServer,
 } from '../features/social-rating/background';
 import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
@@ -715,6 +716,8 @@ async function openConnect(): Promise<ViewerConnectResponse> {
       });
     }
     await clearViewerAuthFeedback();
+    // Свежий вход: забрать алиасы с сервера и отдать локальные, накопленные до входа.
+    void syncAliasesWithServer().catch(() => {});
     return { ok: true };
   } catch (error) {
     return failViewerConnect({
@@ -750,7 +753,8 @@ async function validateStoredAccount(): Promise<void> {
   const account = await getViewerAccount();
   if (!account?.token) return;
   try {
-    await hydrateAccount(account.token);
+    const hydrated = await hydrateAccount(account.token);
+    if (hydrated.ok) void syncAliasesIfStale().catch(() => {});
   } catch {
     await clearViewerAccount();
   }

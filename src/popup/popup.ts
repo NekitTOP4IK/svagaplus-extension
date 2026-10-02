@@ -2,6 +2,7 @@ import browser from '../shared/browser';
 import { FRONTEND_URL } from '../shared/config';
 import { getChannelLoginFromUrl } from '../shared/twitch';
 import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../shared/types';
+import { aliasExportFilename, formatAliasCount, parseAliasImport, toSortedAliasItems, type AliasItem } from './alias-list';
 import { buildPopupErrorBanner, type PopupErrorBanner } from './error-banner';
 import { derivePopupView, shouldApplyMetricsResponse, type AccountView, type PopupMetricsState, type PopupRating, type PopupState, type UiStatus } from './view-model';
 
@@ -39,6 +40,10 @@ type AuthFeedbackResponse = {
 
 type UserRatingResponse = PopupRating | null;
 
+type AliasesResponse = { aliases?: Record<string, string> };
+type AliasMutationResponse = { ok: boolean; imported?: number; error?: string };
+type AliasExportResponse = { data?: AliasItem[]; count?: number };
+
 const DEFAULT_SETTINGS: ExtensionSettings = {
   socialRatingEnabled: true,
   customNicknamesEnabled: true,
@@ -57,6 +62,9 @@ const state: PopupState = {
 let transientBanner: PopupErrorBanner | null = null;
 let feedbackBanner: PopupErrorBanner | null = null;
 let metricsRequestGeneration = 0;
+
+let aliasItems: AliasItem[] = [];
+let aliasBusy = false;
 
 function $(id: string): HTMLElement | null {
   return document.getElementById(id);
@@ -188,6 +196,8 @@ function render(): void {
     setAvatar(null, '');
   }
 
+  renderAliasControls();
+
   setText('metricsState', view.metricsText);
   setText('metricsChannel', view.metricsChannel ? `· ${view.metricsChannel}` : '');
   setText('swagScore', formatMetric(view.swagScore));
@@ -317,6 +327,181 @@ async function onToggleChange(
   render();
 }
 
+// ── Алиасы ─────────────────────────────────────────────────────────────────
+
+function setAliasStatus(text: string | null, tone: 'info' | 'ok' | 'error' = 'info'): void {
+  const el = $('aliasStatus');
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text ?? '';
+  el.classList.toggle('alias-status--ok', tone === 'ok');
+  el.classList.toggle('alias-status--error', tone === 'error');
+}
+
+function aliasErrorText(error: string | undefined): string {
+  if (error === 'not_authenticated') return 'Войдите в аккаунт, чтобы синхронизировать алиасы.';
+  return 'Сервер не ответил. Алиасы сохранены в браузере, синхронизируются позже.';
+}
+
+function renderAliasControls(): void {
+  setHidden('aliasSync', !state.account?.twitchLogin);
+  setHidden('aliasSyncSpinner', !aliasBusy);
+  for (const id of ['aliasImport', 'aliasSync']) {
+    const button = $(id) as HTMLButtonElement | null;
+    if (button) button.disabled = aliasBusy;
+  }
+  const exportButton = $('aliasExport') as HTMLButtonElement | null;
+  if (exportButton) exportButton.disabled = aliasBusy || aliasItems.length === 0;
+}
+
+function renderAliasList(): void {
+  setText('aliasCount', aliasItems.length > 0 ? formatAliasCount(aliasItems.length) : '');
+  setHidden('aliasEmpty', aliasItems.length > 0);
+
+  const list = $('aliasList');
+  if (list) {
+    list.hidden = aliasItems.length === 0;
+    // Только textContent: алиас — произвольный пользовательский текст.
+    list.replaceChildren(...aliasItems.map(({ login, alias }) => {
+      const row = document.createElement('li');
+      row.className = 'alias-row';
+
+      const loginEl = document.createElement('span');
+      loginEl.className = 'alias-login';
+      loginEl.textContent = login;
+      loginEl.title = login;
+
+      const arrow = document.createElement('span');
+      arrow.className = 'alias-arrow';
+      arrow.textContent = '→';
+      arrow.setAttribute('aria-hidden', 'true');
+
+      const aliasEl = document.createElement('span');
+      aliasEl.className = 'alias-name';
+      aliasEl.textContent = alias;
+      aliasEl.title = alias;
+
+      const remove = document.createElement('button');
+      remove.className = 'alias-delete';
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = 'Удалить алиас';
+      remove.setAttribute('aria-label', `Удалить алиас ${alias} для ${login}`);
+      remove.disabled = aliasBusy;
+      remove.addEventListener('click', () => { void removeAliasFromList(login); });
+
+      row.append(loginEl, arrow, aliasEl, remove);
+      return row;
+    }));
+  }
+  renderAliasControls();
+}
+
+async function loadAliases(): Promise<void> {
+  const res = await sendMessage<AliasesResponse>({ type: 'GET_ALIASES' });
+  aliasItems = toSortedAliasItems(res?.aliases);
+  renderAliasList();
+}
+
+async function withAliasBusy(task: () => Promise<void>): Promise<void> {
+  if (aliasBusy) return;
+  aliasBusy = true;
+  renderAliasList();
+  try {
+    await task();
+  } finally {
+    aliasBusy = false;
+    await loadAliases();
+  }
+}
+
+async function removeAliasFromList(login: string): Promise<void> {
+  await withAliasBusy(async () => {
+    // Локально удаляется всегда; ok: false означает, что не дошло только до сервера.
+    await sendMessage<AliasMutationResponse>({ type: 'DELETE_ALIAS', login });
+    setAliasStatus(null);
+  });
+}
+
+async function exportAliasList(): Promise<void> {
+  const res = await sendMessage<AliasExportResponse>({ type: 'EXPORT_ALIASES' });
+  const data = res?.data ?? [];
+  if (data.length === 0) {
+    setAliasStatus('Экспортировать нечего.');
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = aliasExportFilename(new Date());
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  setAliasStatus(`Сохранено: ${formatAliasCount(data.length)}.`, 'ok');
+}
+
+// Firefox закрывает popup, как только открывается системный диалог выбора файла,
+// и событие change до страницы уже не доходит. Поэтому там импорт идёт из обычной вкладки.
+const isFirefox = navigator.userAgent.includes('Firefox');
+const openedAsTab = new URLSearchParams(location.search).has('tab');
+
+function startAliasImport(): void {
+  if (isFirefox && !openedAsTab) {
+    void browser.tabs
+      .create({ url: browser.runtime.getURL('src/popup/popup.html?tab=aliases'), active: true })
+      .then(() => window.close());
+    return;
+  }
+  ($('aliasImportFile') as HTMLInputElement | null)?.click();
+}
+
+async function importAliasFile(input: HTMLInputElement): Promise<void> {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+
+  const parsed = parseAliasImport(await file.text());
+  if (!parsed.ok) {
+    setAliasStatus(parsed.error, 'error');
+    return;
+  }
+
+  await withAliasBusy(async () => {
+    const res = await sendMessage<AliasMutationResponse>({ type: 'IMPORT_ALIASES', data: parsed.items });
+    const imported = res?.imported ?? 0;
+    const skippedText = parsed.skipped > 0 ? ` Пропущено некорректных: ${parsed.skipped}.` : '';
+    if (!res) {
+      setAliasStatus('Расширение не ответило на импорт.', 'error');
+    } else if (res.ok) {
+      setAliasStatus(`Импортировано: ${formatAliasCount(imported)}.${skippedText}`, 'ok');
+    } else if (res.error === 'bad_request') {
+      setAliasStatus('Файл не прошёл проверку расширения.', 'error');
+    } else {
+      setAliasStatus(`Импортировано локально: ${formatAliasCount(imported)}. ${aliasErrorText(res.error)}`, 'error');
+    }
+  });
+}
+
+async function syncAliasList(): Promise<void> {
+  await withAliasBusy(async () => {
+    const res = await sendMessage<AliasMutationResponse>({ type: 'SYNC_ALIASES' });
+    if (res?.ok) setAliasStatus('Синхронизировано с сервером.', 'ok');
+    else setAliasStatus(aliasErrorText(res?.error), 'error');
+  });
+}
+
+function bindAliasEvents(): void {
+  $('aliasExport')?.addEventListener('click', () => { void exportAliasList(); });
+  $('aliasImport')?.addEventListener('click', startAliasImport);
+  $('aliasSync')?.addEventListener('click', () => { void syncAliasList(); });
+  const fileInput = $('aliasImportFile') as HTMLInputElement | null;
+  fileInput?.addEventListener('change', () => { void importAliasFile(fileInput); });
+
+  // Фон дописывает алиасы при синхронизации, карточки на Twitch — при переименовании.
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && 'aliases' in changes && !aliasBusy) void loadAliases();
+  });
+}
+
 function bindEvents(): void {
   $('primaryAction')?.addEventListener('click', () => {
     if (state.uiStatus === 'loading') return;
@@ -346,8 +531,10 @@ function bindEvents(): void {
 }
 
 bindEvents();
+bindAliasEvents();
 render();
 void loadState();
+void loadAliases();
 
 browser.tabs.onActivated.addListener(() => { void loadState(); });
 browser.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {

@@ -113,6 +113,29 @@
         </label>
       </section>
 
+      <section id="aliasesPanel" class="panel reveal" aria-labelledby="aliasesTitle">
+        <div class="panel-head">
+          <h2 id="aliasesTitle">Алиасы</h2>
+          <span id="aliasCount" class="metrics-channel"></span>
+        </div>
+
+        <p id="aliasEmpty" class="alias-empty">
+          Пока пусто. Переименовать зрителя можно карандашом в его карточке на Twitch.
+        </p>
+        <ul id="aliasList" class="alias-list" hidden></ul>
+
+        <div class="alias-actions">
+          <button id="aliasExport" class="button button--secondary button--small" type="button">Экспорт</button>
+          <button id="aliasImport" class="button button--secondary button--small" type="button">Импорт</button>
+          <button id="aliasSync" class="button button--text button--small" type="button" hidden>
+            <span id="aliasSyncSpinner" class="button-spinner" hidden aria-hidden="true"></span>
+            Синхронизировать
+          </button>
+          <input id="aliasImportFile" type="file" accept=".json,application/json" hidden />
+        </div>
+        <p id="aliasStatus" class="alias-status" role="status" aria-live="polite" hidden></p>
+      </section>
+
       <div id="popupErrorSlot" class="toast-slot">
         <div class="toast-clip">
           <section id="popupErrorBanner" class="toast" role="alert" aria-live="assertive">
