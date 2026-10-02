@@ -21,13 +21,41 @@
   margin-right: 4px;
 }
 
+/* Чат: тот же ритм, что у нативных баджей (.chat-badge / .ffz-badge: margin-right 3px).
+   Последний нативный бадж уже даёт 3px справа, поэтому слева у списка отступа нет. */
 .tcb-badge-list {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 4px;
-  margin-right: 4px;
-  vertical-align: -4px;
+  gap: 3px;
+  margin-left: 0;
+  margin-right: 3px;
+  vertical-align: middle;
+  margin-bottom: 2px;
+}
+
+/* Карточки 7TV: картинки становятся прямыми flex-элементами ряда баджей
+   и получают его gap, перенос и выравнивание. */
+.tcb-badge-list.tcb-badge-list--usercard {
+  display: contents;
+}
+
+/* Нативная карточка Twitch, строка «Значки»: повторяем ячейку 32x32 с картинкой 24px,
+   но без кнопки — наш бадж не ведёт на страницу описания. */
+.tcb-card-badge {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  margin: 8px 8px 0 0;
+  padding: 3px;
+  border: 1px solid var(--color-border-base, rgba(83, 83, 95, 0.48));
+  border-radius: 4px;
+  vertical-align: top;
+}
+
+.tcb-card-badge .tcb-badge-img {
+  display: block;
+  border-radius: 0;
 }
 
 .seventv-chat-user-badge-list .tcb-badge-img:not(:last-child),

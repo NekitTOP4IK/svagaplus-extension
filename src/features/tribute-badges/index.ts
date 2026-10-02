@@ -4,7 +4,7 @@ import { fetchChannelBadges, normalizeViewerBadges } from './api';
 import { normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
-import { processUserCard } from './usercard';
+import { USERCARD_SELECTOR, processUserCard } from './usercard';
 import { clearBadgeRenderState, getBadgeRenderState, isTributeMessageHealthy } from './render-state';
 import { ChannelStyleCache } from './channel-style-cache';
 import type { Badge, FontPreset, ViewerConfig } from './types';
@@ -287,7 +287,7 @@ async function flushViewerBadgeBatch(channelName: string): Promise<void> {
 }
 
 async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): Promise<void> {
-  console.info(LOG_PREFIX, 'flush batch', { channelName, count: logins.length });
+  if (DEBUG) console.debug(LOG_PREFIX, 'flush batch', { channelName, count: logins.length });
   const generations = Object.fromEntries(
     logins.map((login) => {
       const key = viewerBadgeKey(channelName, login);
@@ -851,8 +851,12 @@ function processAddedNode(node: Node): void {
   if (node.classList.contains('chat-line__message')) {
     enqueueOrProcessMessage(node as HTMLElement, 'native');
   }
-  if (node.classList.contains('seventv-user-card-float') || node.classList.contains('seventv-user-card') || node.classList.contains('viewer-card')) {
+  if (node.matches(USERCARD_SELECTOR)) {
     processUserCard(node, tributeContext);
+  } else {
+    // Нативная карточка вставляется пустой оболочкой, имя и «Значки» монтируются внутрь позже.
+    const card = node.closest<HTMLElement>(USERCARD_SELECTOR);
+    if (card && !isOwnCardBadgeNode(node)) scheduleCardReprocess(card);
   }
 
   node.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => {
@@ -861,9 +865,29 @@ function processAddedNode(node: Node): void {
   node.querySelectorAll('.chat-line__message').forEach((el) => {
     enqueueOrProcessMessage(el as HTMLElement, 'native');
   });
-  node.querySelectorAll('.seventv-user-card-float, .seventv-user-card, .viewer-card, [data-a-target="viewer-card"]').forEach((el) => {
+  node.querySelectorAll(USERCARD_SELECTOR).forEach((el) => {
     processUserCard(el, tributeContext);
   });
+}
+
+function isOwnCardBadgeNode(node: Element): boolean {
+  return node.classList.contains('tcb-card-badge') || node.classList.contains('tcb-badge-list') || node.classList.contains('tcb-badge-img');
+}
+
+const cardReprocessQueue = new Set<HTMLElement>();
+let cardReprocessTimer: number | null = null;
+
+function scheduleCardReprocess(card: HTMLElement): void {
+  cardReprocessQueue.add(card);
+  if (cardReprocessTimer !== null) return;
+  cardReprocessTimer = window.setTimeout(() => {
+    cardReprocessTimer = null;
+    const cards = Array.from(cardReprocessQueue);
+    cardReprocessQueue.clear();
+    for (const item of cards) {
+      if (item.isConnected) processUserCard(item, tributeContext);
+    }
+  }, 50);
 }
 
 const repairQueue = new Set<HTMLElement>();
@@ -937,7 +961,7 @@ function startObserver(): void {
 
   document.querySelectorAll('.seventv-message, .seventv-user-message').forEach((el) => processSevenTVMessage(el, tributeContext));
   document.querySelectorAll('.chat-line__message').forEach((el) => processNativeMessage(el, tributeContext));
-  document.querySelectorAll('.seventv-user-card-float, .viewer-card').forEach((el) => processUserCard(el, tributeContext));
+  document.querySelectorAll(USERCARD_SELECTOR).forEach((el) => processUserCard(el, tributeContext));
 }
 
 function checkUrlChange(): void {

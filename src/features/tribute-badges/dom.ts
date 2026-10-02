@@ -61,7 +61,7 @@ function ensureTooltipDelegation(): void {
   document.addEventListener('wheel', hideTooltip, { passive: true });
 }
 
-export function createBadgeImg(badge: Badge): HTMLImageElement | null {
+export function createBadgeImg(badge: Badge, size = 18): HTMLImageElement | null {
   const url = badge.image_url || badge.url;
   if (!url) return null;
   ensureTooltipDelegation();
@@ -70,7 +70,8 @@ export function createBadgeImg(badge: Badge): HTMLImageElement | null {
   img.className = 'tcb-badge-img';
   img.alt = badge.title || 'Badge';
   if (badge.title) img.dataset.tcbTitle = badge.title;
-  img.style.cssText = 'width:18px!important;height:18px!important;min-width:18px!important;min-height:18px!important;max-width:18px!important;max-height:18px!important;';
+  const px = `${size}px!important`;
+  img.style.cssText = `width:${px};height:${px};min-width:${px};min-height:${px};max-width:${px};max-height:${px};`;
   img.onerror = () => { img.style.display = 'none'; };
   return img;
 }
@@ -166,7 +167,7 @@ export function updateDynamicStyles(
 
   let css = `${fontCss}
     .tcb-badge-img {
-      cursor: pointer;
+      cursor: default;
       pointer-events: auto !important;
     }
   `;
