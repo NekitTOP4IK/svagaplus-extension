@@ -25,7 +25,7 @@ const { applyViewerNameStyle } = require('../dist-types/features/tribute-badges/
 const { clearBadgeRenderState } = require('../dist-types/features/tribute-badges/render-state.js');
 
 const style = {
-  name_css: 'background: linear-gradient(90deg, #00ffff, #ff00ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; -webkit-text-stroke: 2px #111111; paint-order: stroke fill; filter: drop-shadow(0 0 4px #00ffff);',
+  name_css: 'background: linear-gradient(90deg, #00ffff, #ff00ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(2px 0 0 #111111) drop-shadow(-2px 0 0 #111111) drop-shadow(0 2px 0 #111111) drop-shadow(0 -2px 0 #111111) drop-shadow(0 0 4px #00ffff);',
 };
 let cachedStyle = style;
 const context = {
@@ -43,15 +43,11 @@ test('applies server name effects before badges resolve and removes every contro
   processUserCard(card, context);
 
   for (const element of [chatName, cardName]) {
-    assert.equal(element.style.getPropertyValue('-webkit-text-stroke'), '2px #111111');
-    assert.equal(element.style.getPropertyValue('paint-order'), 'stroke fill');
-    assert.match(element.style.getPropertyValue('filter'), /drop-shadow/);
+    assert.match(element.style.getPropertyValue('filter'), /^drop-shadow\(2px 0 0 #111111\).*drop-shadow\(0 0 4px #00ffff\)$/);
   }
 
   applyViewerNameStyle(chatName, undefined);
   assert.equal(chatName.style.getPropertyValue('filter'), '');
-  assert.equal(chatName.style.getPropertyValue('-webkit-text-stroke'), '');
-  assert.equal(chatName.style.getPropertyValue('paint-order'), '');
   assert.equal(chatName.style.getPropertyValue('background'), '');
 });
 
@@ -62,15 +58,11 @@ test('7TV applies no-badge effects and clears them through its renderer after a 
   cachedStyle = style;
   processSevenTVMessage(message, context);
   assert.match(name.style.getPropertyValue('background'), /linear-gradient/);
-  assert.equal(name.style.getPropertyValue('-webkit-text-stroke'), '2px #111111');
-  assert.equal(name.style.getPropertyValue('paint-order'), 'stroke fill');
-  assert.match(name.style.getPropertyValue('filter'), /drop-shadow/);
+  assert.match(name.style.getPropertyValue('filter'), /^drop-shadow\(2px 0 0 #111111\).*drop-shadow\(0 0 4px #00ffff\)$/);
 
   cachedStyle = undefined;
   clearBadgeRenderState(message);
   processSevenTVMessage(message, context);
   assert.equal(name.style.getPropertyValue('background'), '');
-  assert.equal(name.style.getPropertyValue('-webkit-text-stroke'), '');
-  assert.equal(name.style.getPropertyValue('paint-order'), '');
   assert.equal(name.style.getPropertyValue('filter'), '');
 });
