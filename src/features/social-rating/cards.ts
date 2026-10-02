@@ -277,9 +277,11 @@ function labelText(channel: string, isLow: boolean): string {
 
 function setLabel(el: HTMLElement, channel: string, isLow: boolean): void {
   el.style.color = isLow ? '#ff5252' : 'var(--tsr-muted, #d1d1dc)';
-  el.innerHTML = isLow
-    ? `${WARN_SVG}<span>${labelText(channel, true)}</span>`
-    : `<span>${labelText(channel, false)}</span>`;
+  // Имя канала приходит из атрибута DOM — только textContent, без разбора как HTML.
+  el.innerHTML = isLow ? WARN_SVG : '';
+  const text = document.createElement('span');
+  text.textContent = labelText(channel, isLow);
+  el.appendChild(text);
 }
 
 function awardTitle(grant: ActiveBadgeGrant): string {
