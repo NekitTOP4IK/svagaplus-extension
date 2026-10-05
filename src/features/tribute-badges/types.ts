@@ -4,8 +4,9 @@ export interface Badge {
   title?: string | null;
   rank?: number | null;
   source?: 'tra' | 'collectible' | 'tsr' | string;
-  rarity?: 'common' | 'rare' | 'epic' | 'mythic' | string | null;
+  rarity?: 'common' | 'rare' | 'epic' | 'mythic' | 'service' | string | null;
   is_animated?: boolean;
+  page?: string | null;
 }
 
 export interface ViewerConfig {

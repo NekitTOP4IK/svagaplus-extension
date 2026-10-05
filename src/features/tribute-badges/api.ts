@@ -1,6 +1,7 @@
 import browser from '../../shared/browser';
 import { BACKEND_URL } from '../../shared/config';
 import type { Badge } from './types';
+import type { BadgeCardData } from './badge-card';
 
 const LOG_PREFIX = '[Svaga+ badges]';
 // Подробный лог глушится в проде: на людном канале это строка на каждый
@@ -17,6 +18,7 @@ interface V3BadgePayload {
   active?: unknown;
   rarity?: unknown;
   is_animated?: unknown;
+  page?: unknown;
 }
 
 interface V3ViewerPayload {
@@ -41,6 +43,8 @@ interface V3ChannelBadgesPayload {
   viewers?: Record<string, V3ViewerPayload>;
 }
 
+export const BADGE_PAGE_RE = /^\/badges\/(collectible|service|sub|social)\/[A-Za-z0-9-]{1,64}$/;
+
 function absoluteUrl(url: unknown): string | null {
   if (typeof url !== 'string' || !url) return null;
   if (/^https?:\/\//i.test(url)) return url;
@@ -60,6 +64,7 @@ function normalizeBadge(raw: V3BadgePayload | null | undefined, fallbackRank: nu
     source,
     rarity: typeof raw?.rarity === 'string' ? raw.rarity : null,
     is_animated: raw?.is_animated === true,
+    page: typeof raw?.page === 'string' && BADGE_PAGE_RE.test(raw.page) ? raw.page : null,
   };
 }
 
@@ -124,6 +129,16 @@ export async function fetchChannelBadges(channel: string, logins: string[], forc
     return payload;
   } catch (error) {
     console.warn(LOG_PREFIX, 'batch request failed', { channel, logins, error });
+    return null;
+  }
+}
+
+export async function fetchBadgeCard(page: string): Promise<{ card: BadgeCardData; url: string } | null> {
+  try {
+    const response = await browser.runtime.sendMessage({ type: 'FETCH_BADGE_CARD', page }) as { ok?: boolean; card?: BadgeCardData; url?: string } | null;
+    return response?.ok && response.card && response.url ? { card: response.card, url: response.url } : null;
+  } catch (error) {
+    console.warn(LOG_PREFIX, 'badge card request failed', { page, error });
     return null;
   }
 }

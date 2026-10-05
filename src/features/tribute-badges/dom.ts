@@ -70,6 +70,7 @@ export function createBadgeImg(badge: Badge, size = 18): HTMLImageElement | null
   img.className = 'tcb-badge-img';
   img.alt = badge.title || 'Badge';
   if (badge.title) img.dataset.tcbTitle = badge.title;
+  if (badge.page) img.dataset.tcbPage = badge.page;
   const px = `${size}px!important`;
   img.style.cssText = `width:${px};height:${px};min-width:${px};min-height:${px};max-width:${px};max-height:${px};`;
   img.onerror = () => { img.style.display = 'none'; };

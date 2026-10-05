@@ -102,3 +102,106 @@
   border-top-color: rgba(24, 24, 27, 0.97);
 }
 
+.tcb-badge-img[data-tcb-page] {
+  cursor: pointer !important;
+}
+
+.tcb-card {
+  position: fixed;
+  z-index: 10000;
+  width: 288px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #1f1f23;
+  outline: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  color: #efeff1;
+  font-family: Inter, Roobert, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tcb-card--loading {
+  padding: 16px;
+  color: #adadb8;
+}
+
+.tcb-card__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 16px 12px;
+}
+
+.tcb-card__img {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.tcb-card__name {
+  margin-bottom: 6px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.tcb-card__kind {
+  font-size: 12px;
+  color: #adadb8;
+}
+
+.tcb-card__tag {
+  --r: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: color-mix(in srgb, var(--r) 22%, #1b1b25);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--r) 55%, transparent);
+}
+
+.tcb-card[data-rarity='rare'] .tcb-card__tag { --r: #38bdf8; }
+.tcb-card[data-rarity='epic'] .tcb-card__tag { --r: #d946ef; }
+.tcb-card[data-rarity='mythic'] .tcb-card__tag { --r: #fbbf24; }
+.tcb-card[data-rarity='service'] .tcb-card__tag {
+  box-shadow: none;
+  background: linear-gradient(90deg, #be185d, #b45309, #15803d, #0e7490, #4338ca, #a21caf);
+}
+
+.tcb-card__desc {
+  display: -webkit-box;
+  margin: 0;
+  padding: 0 16px 14px;
+  overflow: hidden;
+  color: #adadb8;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.tcb-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 12px;
+  color: #adadb8;
+}
+
+.tcb-card__link {
+  color: #efeff1 !important;
+  text-decoration: none !important;
+  border-bottom: 1px solid rgba(239, 239, 241, 0.3);
+}
+
+.tcb-card__link:hover {
+  border-bottom-color: #efeff1;
+}

@@ -1,6 +1,7 @@
 import { BACKEND_URL } from '../../shared/config';
 import browser from '../../shared/browser';
-import { fetchChannelBadges, normalizeViewerBadges } from './api';
+import { fetchBadgeCard, fetchChannelBadges, normalizeViewerBadges } from './api';
+import { initBadgeCards } from './badge-card';
 import { normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
@@ -1022,6 +1023,7 @@ function hookNavigation(): void {
 }
 
 export function startTributeBadgesContent(): void {
+  initBadgeCards(fetchBadgeCard);
   currentChannelName = extractChannelName();
   if (currentChannelName) {
     startStartupScan(currentChannelName);

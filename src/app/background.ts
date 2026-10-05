@@ -1,6 +1,7 @@
 import browser from '../shared/browser';
 import {
   BACKEND_URL,
+  FRONTEND_URL,
   VIEWER_AUTH_REDIRECT_PATH,
 } from '../shared/config';
 import { getTwitchAuthorizeUrl, getViewerMe, linkViewerTwitch } from '../shared/api';
@@ -149,6 +150,37 @@ function normalizeAlias(value: unknown, allowEmpty = true): string | null {
 
 function badRequest(): Promise<{ ok: false; error: 'bad_request' }> {
   return Promise.resolve({ ok: false, error: 'bad_request' });
+}
+
+const BADGE_PAGE_RE = /^\/badges\/(collectible|service|sub|social)\/[A-Za-z0-9-]{1,64}$/;
+const BADGE_CARD_TTL_MS = 5 * 60 * 1000;
+const BADGE_CARD_CACHE_MAX = 200;
+const badgeCardCache = new Map<string, { at: number; card: unknown }>();
+
+type BadgeCardResponse = { ok: true; card: unknown; url: string } | { ok: false; error: string };
+
+async function fetchBadgeCard(page: string): Promise<BadgeCardResponse> {
+  const url = `${FRONTEND_URL}${page}`;
+  const cached = badgeCardCache.get(page);
+  if (cached && Date.now() - cached.at < BADGE_CARD_TTL_MS) return { ok: true, card: cached.card, url };
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/v3${page}`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return { ok: false, error: `http_${res.status}` };
+    const body = await res.json() as { success?: boolean; data?: unknown };
+    if (!body?.success || !body.data) return { ok: false, error: 'bad_response' };
+    if (badgeCardCache.size >= BADGE_CARD_CACHE_MAX) {
+      const oldest = badgeCardCache.keys().next().value;
+      if (oldest !== undefined) badgeCardCache.delete(oldest);
+    }
+    badgeCardCache.set(page, { at: Date.now(), card: body.data });
+    return { ok: true, card: body.data, url };
+  } catch {
+    return { ok: false, error: 'network' };
+  }
+}
+
+export function __fetchBadgeCard(page: string): Promise<BadgeCardResponse> {
+  return fetchBadgeCard(page);
 }
 
 function channelViewerKey(channelLogin: string, login: string): string {
@@ -907,6 +939,11 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
       if (!login || !channelLogin) return badRequest();
       return fetchRatingForCard(login, channelLogin);
+    }
+    case 'FETCH_BADGE_CARD': {
+      const page = (message as { page?: unknown }).page;
+      if (typeof page !== 'string' || !BADGE_PAGE_RE.test(page)) return badRequest();
+      return fetchBadgeCard(page);
     }
     case 'FETCH_CHANNEL_BADGES': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
