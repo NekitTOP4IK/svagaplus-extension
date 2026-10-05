@@ -123,6 +123,38 @@ test('native viewer card: ours become plain 24px cells at the end of the badge r
   assert.equal(card.querySelectorAll('.message-list .tcb-badge-list').length, 1, 'chat history copies are left alone');
 });
 
+test('native viewer card: the header name is never styled', async () => {
+  const card = mount(`
+    <div class="viewer-card" data-a-target="viewer-card">
+      <div class="viewer-card-header__display-name">
+        <div><div>
+          <h4><a class="tw-link" href="/viewerone">ViewerOne</a><span><button></button></span></h4>
+        </div></div>
+        <div><p>Учетная запись создана 27 июля 2026 г.</p><p>Отслеживает с 27 июля 2026 г.</p></div>
+      </div>
+    </div>`);
+  const ctx = { ...contextFor('viewerone'), getCachedUser: () => ({ name_css: 'color: rgb(255, 0, 0)' }) };
+  processUserCard(card, ctx);
+  await settle();
+
+  assert.equal(card.querySelectorAll('[style]').length, 0);
+  assert.equal(card.querySelectorAll('[data-tcb-name-style]').length, 0);
+});
+
+test('7TV card: the name is still styled', async () => {
+  const card = mount(`
+    <div class="seventv-user-card">
+      <a class="seventv-user-card-usertag" href="https://twitch.tv/viewerone">
+        <div class="seventv-chat-user"><span class="seventv-chat-user-username">viewerone</span></div>
+      </a>
+    </div>`);
+  const ctx = { ...contextFor('viewerone'), getCachedUser: () => ({ name_css: 'color: rgb(255, 0, 0)' }) };
+  processUserCard(card, ctx);
+  await settle();
+
+  assert.equal(card.querySelector('.seventv-chat-user-username').style.getPropertyValue('color'), 'rgb(255, 0, 0)');
+});
+
 test('native viewer card: no badge row yet → failed, re-processed once the row mounts', async () => {
   const card = mount(nativeCardHtml({ withBadgeRow: false }));
   const ctx = contextFor('viewerone');

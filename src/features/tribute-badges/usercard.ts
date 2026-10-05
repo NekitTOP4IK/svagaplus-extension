@@ -48,6 +48,7 @@ const USERCARD_NAME_SELECTOR = '.seventv-chat-user-username, .seventv-user-card-
 
 /** Карточки, в которых рисуем баджи. Панель модератора `.user-details` сюда намеренно не входит. */
 export const USERCARD_SELECTOR = '.seventv-user-card-float, .seventv-user-card, .seventv-usercard, .viewer-card, [data-a-target="viewer-card"]';
+const NATIVE_VIEWER_CARD_SELECTOR = '.viewer-card, [data-a-target="viewer-card"]';
 
 // Ячейка нативной карточки: 32x32, картинка 24px. Кнопки нет — у наших баджей нет страницы «за что выдан».
 const VIEWER_CARD_BADGE_SIZE = 24;
@@ -72,7 +73,7 @@ function resolveCardPlacement(cardEl: HTMLElement, nameEl: HTMLElement): CardPla
   // 7TV (старый и новый): flex-ряд баджей с gap — наши встают в его конец.
   const grid = cardEl.querySelector<HTMLElement>('.seventv-user-card-badges, .seventv-usercard-badges');
   if (grid) return { kind: 'grid', container: grid };
-  if (cardEl.matches('.viewer-card, [data-a-target="viewer-card"]')) {
+  if (cardEl.matches(NATIVE_VIEWER_CARD_SELECTOR)) {
     const row = findViewerCardBadgeRow(cardEl);
     return row ? { kind: 'viewer-card', container: row } : null;
   }
@@ -123,7 +124,8 @@ export function processUserCard(card: Element, context: UserCardContext): void {
   const username = resolveCardLogin(cardEl, targetNameEl, rawText);
   if (!username) return;
 
-  if (targetNameEl) applyViewerNameStyle(targetNameEl, context.getCachedUser(username));
+  const stylesName = !cardEl.matches(NATIVE_VIEWER_CARD_SELECTOR);
+  if (targetNameEl && stylesName) applyViewerNameStyle(targetNameEl, context.getCachedUser(username));
 
   // Карточку перерисовал фреймворк и выкинул наши баджи — рендерим заново.
   if (getBadgeRenderState(cardEl) === 'rendered' && !cardEl.querySelector(OWN_CARD_BADGES_SELECTOR)) {
@@ -147,7 +149,7 @@ export function processUserCard(card: Element, context: UserCardContext): void {
         failBadgeRender(cardEl, username, renderToken);
         return;
       }
-      applyViewerNameStyle(currentTargetNameEl, context.getCachedUser(username));
+      if (stylesName) applyViewerNameStyle(currentTargetNameEl, context.getCachedUser(username));
 
       const uniqueBadges = dedupeBadges(badges);
       cardEl.querySelectorAll(OWN_CARD_BADGES_SELECTOR).forEach((badge) => badge.remove());

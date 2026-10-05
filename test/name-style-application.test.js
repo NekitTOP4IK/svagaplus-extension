@@ -36,19 +36,25 @@ const context = {
 
 test('applies server name effects before badges resolve and removes every controlled effect on reset', () => {
   const chatName = document.querySelector('.chat-author__display-name');
-  const card = document.querySelector('.viewer-card');
-  const cardName = document.querySelector('.viewer-card-header__display-name');
 
   processNativeMessage(document.querySelector('.chat-line__message'), context);
-  processUserCard(card, context);
-
-  for (const element of [chatName, cardName]) {
-    assert.match(element.style.getPropertyValue('filter'), /^drop-shadow\(2px 0 0 #111111\).*drop-shadow\(0 0 4px #00ffff\)$/);
-  }
+  assert.match(chatName.style.getPropertyValue('filter'), /^drop-shadow\(2px 0 0 #111111\).*drop-shadow\(0 0 4px #00ffff\)$/);
 
   applyViewerNameStyle(chatName, undefined);
   assert.equal(chatName.style.getPropertyValue('filter'), '');
   assert.equal(chatName.style.getPropertyValue('background'), '');
+});
+
+test('native viewer card header name is left untouched', async () => {
+  const card = document.querySelector('.viewer-card');
+  const cardName = document.querySelector('.viewer-card-header__display-name');
+
+  cachedStyle = style;
+  processUserCard(card, context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(cardName.getAttribute('style'), null);
+  assert.equal(cardName.dataset.tcbNameStyle, undefined);
 });
 
 test('7TV applies no-badge effects and clears them through its renderer after a cache refresh', () => {
