@@ -291,28 +291,19 @@ export async function processUserCardAwardBadges(cardElement: Element, login: st
 
 export async function refreshVisibleChatBadges(channelLogin: string): Promise<void> {
   ensureReady();
-  const nativeMessages = Array.from(document.querySelectorAll('.chat-line__message'));
-  const sevenTvMessages = Array.from(document.querySelectorAll('.seventv-user-message'));
-  const all = [...nativeMessages, ...sevenTvMessages];
-  const CHUNK = 32;
-
-  for (let i = 0; i < all.length; i += CHUNK) {
-    const slice = all.slice(i, i + CHUNK);
-    // Последовательный await внутри чанка сводил на нет 80-мс окно батчинга
-    // в social-rating/background: каждое сообщение ждало свой round-trip,
-    // поэтому окно успевало собрать ровно один логин и уходил отдельный
-    // HTTP-запрос на человека. Чанк остаётся — он ограничивает пиковую
-    // нагрузку и даёт точку выхода между итерациями.
-    await Promise.all(slice.map((message) => {
-      message.removeAttribute(DONE_ATTR);
-      const task = message.classList.contains('seventv-user-message')
-        ? processSevenTVChatBadges(message, channelLogin)
-        : processNativeChatBadges(message, channelLogin);
-      // Сбой на одном сообщении не должен ронять чанк целиком и не должен
-      // стать unhandled rejection, пока соседи ещё в полёте.
-      return task.catch(() => {});
-    }));
-    // Yield to the browser between chunks
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  }
+  const all = [
+    ...Array.from(document.querySelectorAll('.chat-line__message')),
+    ...Array.from(document.querySelectorAll('.seventv-user-message')),
+  ];
+  // Все сообщения запускаются разом, чтобы логины попали в одно 80-мс окно
+  // батчинга в background и ушли одним запросом. Чанки с await между ними
+  // превращали буфер чата в несколько последовательных запросов, а
+  // requestAnimationFrame в скрытой вкладке не срабатывал вовсе.
+  await Promise.all(all.map((message) => {
+    message.removeAttribute(DONE_ATTR);
+    const task = message.classList.contains('seventv-user-message')
+      ? processSevenTVChatBadges(message, channelLogin)
+      : processNativeChatBadges(message, channelLogin);
+    return task.catch(() => {});
+  }));
 }

@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { JSDOM } = require('jsdom');
+require('./helpers/build-globals').defineBuildGlobals();
 
 // webextension-polyfill throws outside an extension; stub it before cards.ts pulls it in.
 const polyfillPath = require.resolve('webextension-polyfill');

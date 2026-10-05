@@ -1,4 +1,5 @@
 import browser from 'webextension-polyfill';
+import { BACKEND_URL } from '../../shared/config';
 import { debug, error } from './logger';
 import { RatingData } from './types';
 import { ActiveBadgeGrant } from './types';
@@ -26,7 +27,7 @@ function normalizeBadgeGrants(payload: ChannelBadgesResponse | null, logins: str
       if (!rawUrl) return [];
       const imageUrl = /^https?:\/\//i.test(rawUrl)
         ? rawUrl
-        : new URL(rawUrl, require('../../shared/config').BACKEND_URL).toString();
+        : new URL(rawUrl, BACKEND_URL).toString();
       return [{
         login: normalizedLogin,
         kind: badge.kind === 'low' ? 'low' : 'high',
@@ -74,23 +75,6 @@ export async function fetchBadgeGrants(
   } catch (e) {
     error('api', 'fetchBadgeGrants error:', e);
     return [];
-  }
-}
-
-export async function prefetchChannelBadgeGrants(channelLogin: string): Promise<void> {
-  // Fetching on demand lets Social Rating share Tribute's cache and inflight
-  // requests instead of issuing its own channel-wide /badges request.
-  void channelLogin;
-}
-
-export async function refreshChannelBadgeGrants(channelLogin: string): Promise<void> {
-  try {
-    await browser.runtime.sendMessage({
-      type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
-      channelLogin,
-    });
-  } catch (e) {
-    error('api', 'refreshChannelBadgeGrants error:', e);
   }
 }
 

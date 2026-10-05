@@ -1,20 +1,15 @@
 import browser from 'webextension-polyfill';
 import { getViewerMe } from '../../shared/api';
-import { apiCooldown, channelBadgesKey, ratingKey } from '../../shared/request-cooldown';
+import { apiCooldown, ratingKey } from '../../shared/request-cooldown';
 import { clearViewerAccount, getViewerAccount, setViewerAccount } from '../../shared/storage';
-import { ActiveBadgeGrant } from './types';
 import { debug, error } from './logger';
 
 // Единый источник: shared/config срезает хвостовой слэш, локальное объявление — нет.
 export { BACKEND_URL } from '../../shared/config';
 import { BACKEND_URL } from '../../shared/config';
-const CHANNELS_PATH = '/channels';
-const API_V3_CHANNELS_PATH = '/api/v3' + CHANNELS_PATH;
-const API_V3_SOCIAL_CHANNELS_PATH = '/api/v3/social' + CHANNELS_PATH;
+const API_V3_SOCIAL_CHANNELS_PATH = '/api/v3/social/channels';
 const API_TIMEOUT_MS = 8_000;
 const RATING_CACHE_TTL_MS = 10 * 60 * 1000;
-const BADGE_GRANTS_CACHE_TTL_MS = 10 * 60 * 1000;
-const CHANNEL_GRANTS_TTL_MS = 10 * 60 * 1000;
 
 export interface StoredAuth {
   accessToken?: string;
@@ -31,111 +26,14 @@ type CardRating = { login: string; score: number; swag_score: number; social_sco
 
 const ratingCache = new Map<string, { expiresAt: number; value: CardRating }>();
 const ratingInflight = new Map<string, Promise<CardRating | null>>();
-const badgeGrantCache = new Map<string, { expiresAt: number; value: ActiveBadgeGrant[] }>();
-const badgeGrantInflight = new Map<string, Promise<ActiveBadgeGrant[]>>();
-
-const channelGrantsMap = new Map<string, { expiresAt: number; byLogin: Map<string, ActiveBadgeGrant[]> }>();
-const channelGrantsInflight = new Map<string, Promise<void>>();
-const channelGrantBatches = new Map<string, {
-  pending: Set<string>;
-  timer: ReturnType<typeof setTimeout> | null;
-  waiters: Map<string, Array<(value: ActiveBadgeGrant[]) => void>>;
-}>();
 
 function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
   return `${BACKEND_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function absoluteUrl(url: string | null): string | null {
-  if (!url) return null;
-  if (/^https?:\/\//i.test(url)) return url;
-  return `${new URL(BACKEND_URL).origin}${url.startsWith('/') ? url : `/${url}`}`;
-}
-
 function unwrapApiData<T>(data: any): T {
   return (data?.data ?? data) as T;
-}
-
-function normalizeTsrBadge(item: any): ActiveBadgeGrant | null {
-  if (!item || typeof item !== 'object') return null;
-  if (!Number.isSafeInteger(item.rank)) return null;
-  if (item.source !== 'social_rating') return null;
-
-  const imageUrl = absoluteUrl(typeof item.url === 'string' ? item.url : null);
-  return {
-    login: '',
-    kind: item.kind === 'low' ? 'low' : 'high',
-    rank: item.rank,
-    image_url: imageUrl,
-    title: typeof item.title === 'string' ? item.title : `Топ-${item.rank} чатер на канале`,
-    period_label: typeof item.period_id === 'string' || typeof item.period_id === 'number'
-      ? String(item.period_id)
-      : '',
-  };
-}
-
-function normalizeChannelBadgeGrants(payload: any, logins: string[]): Map<string, ActiveBadgeGrant[]> {
-  const byLogin = new Map<string, ActiveBadgeGrant[]>();
-  const viewers = payload?.viewers ?? {};
-  const badges = payload?.badges ?? {};
-  for (const login of logins) {
-    const entry = viewers?.[login] ?? viewers?.[login.toLowerCase()];
-    const badgeIds = Array.isArray(entry?.badge_ids) ? entry.badge_ids : [];
-    const grants = badgeIds
-      .map((badgeId: any) => {
-        const key = typeof badgeId === 'string' || typeof badgeId === 'number' ? String(badgeId) : '';
-        return normalizeTsrBadge(key ? badges[key] : null);
-      })
-      .filter((badge: ActiveBadgeGrant | null): badge is ActiveBadgeGrant => badge !== null)
-      .map((badge: ActiveBadgeGrant) => ({ ...badge, login: login.toLowerCase() }));
-    byLogin.set(login.toLowerCase(), grants);
-  }
-  return byLogin;
-}
-
-function getCachedChannelGrantsForLogin(channelLogin: string, login: string): ActiveBadgeGrant[] | null {
-  const key = channelLogin.trim().toLowerCase();
-  const cached = channelGrantsMap.get(key);
-  if (!cached || cached.expiresAt <= Date.now()) return null;
-  const normalizedLogin = login.trim().toLowerCase();
-  return cached.byLogin.has(normalizedLogin) ? (cached.byLogin.get(normalizedLogin) ?? []) : null;
-}
-
-function getChannelGrantBatch(channelLogin: string): {
-  pending: Set<string>;
-  timer: ReturnType<typeof setTimeout> | null;
-  waiters: Map<string, Array<(value: ActiveBadgeGrant[]) => void>>;
-} {
-  const key = channelLogin.trim().toLowerCase();
-  let batch = channelGrantBatches.get(key);
-  if (!batch) {
-    batch = { pending: new Set(), timer: null, waiters: new Map() };
-    channelGrantBatches.set(key, batch);
-  }
-  return batch;
-}
-
-async function flushChannelGrantBatch(channelLogin: string): Promise<void> {
-  const channelKey = channelLogin.trim().toLowerCase();
-  const batch = channelGrantBatches.get(channelKey);
-  if (!batch || batch.pending.size === 0) return;
-
-  if (batch.timer) {
-    clearTimeout(batch.timer);
-    batch.timer = null;
-  }
-
-  const logins = Array.from(batch.pending);
-  batch.pending.clear();
-  await fetchBadgeGrants(channelLogin, logins);
-
-  for (const login of logins) {
-    const grants = getChannelGrantsForLogin(channelLogin, login);
-    const waiters = batch.waiters.get(login) ?? [];
-    batch.waiters.delete(login);
-    for (const resolve of waiters) resolve(grants);
-  }
 }
 
 async function apiFetch(path: string, init: RequestInit = {}, timeoutMs = API_TIMEOUT_MS): Promise<Response> {
@@ -180,11 +78,6 @@ function setRatingCache(channelLogin: string, login: string, score: number, soci
 function clearAuthCaches(): void {
   ratingCache.clear();
   ratingInflight.clear();
-  badgeGrantCache.clear();
-  badgeGrantInflight.clear();
-  channelGrantsMap.clear();
-  channelGrantsInflight.clear();
-  channelGrantBatches.clear();
 }
 
 export async function getStored(): Promise<StoredAuth & StoredAliases> {
@@ -412,197 +305,6 @@ export async function castVote(
   } catch (e) {
     error('shared', 'castVote error:', e);
     return { ok: false, error: 'network_error' };
-  }
-}
-
-export async function fetchBadgeGrants(
-  channelLogin: string,
-  logins: string[],
-): Promise<ActiveBadgeGrant[]> {
-  const normalizedLogins = Array.from(new Set(logins.map((login) => login.trim().toLowerCase()).filter(Boolean))).sort();
-  if (normalizedLogins.length === 0) return [];
-  const channelKey = channelLogin.trim().toLowerCase();
-  const coolKey = channelBadgesKey(channelKey);
-  if (apiCooldown.isBlocked(coolKey)) {
-    return normalizedLogins.flatMap((login) => {
-      const cachedLogin = badgeGrantCache.get(`${channelKey}:${login}`);
-      if (cachedLogin && cachedLogin.expiresAt > Date.now()) return cachedLogin.value;
-      return [];
-    });
-  }
-  const key = `${channelKey}:${normalizedLogins.join(',')}`;
-  const cached = badgeGrantCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
-  const existing = badgeGrantInflight.get(key);
-  if (existing) return existing;
-
-  const request = (async (): Promise<ActiveBadgeGrant[]> => {
-    try {
-      const params = new URLSearchParams({ viewers: normalizedLogins.join(',') });
-      const res = await apiFetch(`${API_V3_CHANNELS_PATH}/${encodeURIComponent(channelKey)}/badges?${params.toString()}`);
-      if (!res.ok) {
-        apiCooldown.markFromStatus(coolKey, res.status);
-        const ttl = res.status === 404 ? BADGE_GRANTS_CACHE_TTL_MS : 30_000;
-        const byLogin = new Map<string, ActiveBadgeGrant[]>();
-        for (const login of normalizedLogins) {
-          byLogin.set(login, []);
-          badgeGrantCache.set(`${channelKey}:${login}`, { expiresAt: Date.now() + ttl, value: [] });
-        }
-        channelGrantsMap.set(channelKey, { expiresAt: Date.now() + ttl, byLogin });
-        badgeGrantCache.set(key, { expiresAt: Date.now() + ttl, value: [] });
-        return [];
-      }
-      const payload = unwrapApiData<any>(await res.json());
-      const grantsByLogin = normalizeChannelBadgeGrants(payload, normalizedLogins);
-      const grants = normalizedLogins.flatMap((login) => grantsByLogin.get(login) ?? []);
-      const existingChannelCache = channelGrantsMap.get(channelKey);
-      const byLogin = existingChannelCache && existingChannelCache.expiresAt > Date.now()
-        ? new Map(existingChannelCache.byLogin)
-        : new Map<string, ActiveBadgeGrant[]>();
-      for (const login of normalizedLogins) {
-        const loginGrants = grantsByLogin.get(login) ?? [];
-        byLogin.set(login, loginGrants);
-        badgeGrantCache.set(`${channelKey}:${login}`, {
-          expiresAt: Date.now() + BADGE_GRANTS_CACHE_TTL_MS,
-          value: loginGrants,
-        });
-      }
-      channelGrantsMap.set(channelKey, {
-        expiresAt: Date.now() + CHANNEL_GRANTS_TTL_MS,
-        byLogin,
-      });
-      badgeGrantCache.set(key, { expiresAt: Date.now() + BADGE_GRANTS_CACHE_TTL_MS, value: grants });
-      return grants;
-    } catch (e) {
-      error('shared', 'fetchBadgeGrants error:', e);
-      apiCooldown.markFromStatus(coolKey, 'network');
-      const ttl = 30_000;
-      const byLogin = new Map<string, ActiveBadgeGrant[]>();
-      for (const login of normalizedLogins) {
-        byLogin.set(login, []);
-        badgeGrantCache.set(`${channelKey}:${login}`, { expiresAt: Date.now() + ttl, value: [] });
-      }
-      channelGrantsMap.set(channelKey, { expiresAt: Date.now() + ttl, byLogin });
-      badgeGrantCache.set(key, { expiresAt: Date.now() + ttl, value: [] });
-      return [];
-    } finally {
-      badgeGrantInflight.delete(key);
-    }
-  })();
-
-  badgeGrantInflight.set(key, request);
-  return request;
-}
-
-export async function prefetchChannelBadgeGrants(channelLogin: string): Promise<void> {
-  const channelKey = channelLogin.trim().toLowerCase();
-  const coolKey = channelBadgesKey(channelKey);
-  if (apiCooldown.isBlocked(coolKey)) return;
-
-  const cached = channelGrantsMap.get(channelKey);
-  if (cached && cached.expiresAt > Date.now()) return;
-  if (channelGrantsInflight.has(channelKey)) return channelGrantsInflight.get(channelKey);
-
-  const request = (async () => {
-    try {
-      const res = await apiFetch(`${API_V3_CHANNELS_PATH}/${encodeURIComponent(channelKey)}/badges`);
-      if (!res.ok) {
-        apiCooldown.markFromStatus(coolKey, res.status);
-        channelGrantsMap.set(channelKey, {
-          expiresAt: Date.now() + (res.status === 404 ? CHANNEL_GRANTS_TTL_MS : 30_000),
-          byLogin: new Map(),
-        });
-        return;
-      }
-      const payload = unwrapApiData<any>(await res.json());
-      const viewers = payload?.viewers && typeof payload.viewers === 'object' ? Object.keys(payload.viewers) : [];
-      const grantsByLogin = viewers.length
-        ? normalizeChannelBadgeGrants(payload, viewers)
-        : new Map<string, ActiveBadgeGrant[]>();
-      channelGrantsMap.set(channelKey, {
-        expiresAt: Date.now() + CHANNEL_GRANTS_TTL_MS,
-        byLogin: grantsByLogin,
-      });
-    } catch {
-      apiCooldown.markFromStatus(coolKey, 'network');
-      channelGrantsMap.set(channelKey, {
-        expiresAt: Date.now() + 30_000,
-        byLogin: new Map(),
-      });
-    } finally {
-      channelGrantsInflight.delete(channelKey);
-    }
-  })();
-
-  channelGrantsInflight.set(channelKey, request);
-  return request;
-}
-
-export function getChannelGrantsForLogin(channelLogin: string, login: string): ActiveBadgeGrant[] {
-  const key = channelLogin.trim().toLowerCase();
-  const cached = channelGrantsMap.get(key);
-  if (!cached || cached.expiresAt <= Date.now()) return [];
-  return cached.byLogin.get(login.trim().toLowerCase()) ?? [];
-}
-
-export async function getOrFetchChannelGrantsForLogin(
-  channelLogin: string,
-  login: string,
-): Promise<ActiveBadgeGrant[]> {
-  const key = `${channelLogin.trim().toLowerCase()}:${login.trim().toLowerCase()}`;
-  const cached = badgeGrantCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
-
-  const cachedByChannel = getCachedChannelGrantsForLogin(channelLogin, login);
-  if (cachedByChannel !== null) return cachedByChannel;
-
-  const channelKey = channelLogin.trim().toLowerCase();
-  const normalizedLogin = login.trim().toLowerCase();
-  const batch = getChannelGrantBatch(channelKey);
-
-  return new Promise((resolve) => {
-    const waiters = batch.waiters.get(normalizedLogin) ?? [];
-    waiters.push(resolve);
-    batch.waiters.set(normalizedLogin, waiters);
-    batch.pending.add(normalizedLogin);
-
-    if (!batch.timer) {
-      batch.timer = setTimeout(() => {
-        batch.timer = null;
-        flushChannelGrantBatch(channelKey).catch(() => {
-          const failedLogins = Array.from(batch.waiters.keys());
-          for (const failedLogin of failedLogins) {
-            const failedWaiters = batch.waiters.get(failedLogin) ?? [];
-            batch.waiters.delete(failedLogin);
-            for (const waiter of failedWaiters) waiter([]);
-          }
-        });
-      }, 80);
-    }
-  });
-}
-
-export function invalidateChannelBadgeGrants(channelLogin?: string): void {
-  if (!channelLogin) {
-    apiCooldown.clearPrefix('channel-badges:');
-    badgeGrantCache.clear();
-    badgeGrantInflight.clear();
-    channelGrantsMap.clear();
-    channelGrantsInflight.clear();
-    channelGrantBatches.clear();
-    return;
-  }
-
-  const key = channelLogin.trim().toLowerCase();
-  apiCooldown.clear(channelBadgesKey(key));
-  channelGrantsMap.delete(key);
-  channelGrantsInflight.delete(key);
-  channelGrantBatches.delete(key);
-  for (const cacheKey of Array.from(badgeGrantCache.keys())) {
-    if (cacheKey.startsWith(`${key}:`)) badgeGrantCache.delete(cacheKey);
-  }
-  for (const inflightKey of Array.from(badgeGrantInflight.keys())) {
-    if (inflightKey.startsWith(`${key}:`)) badgeGrantInflight.delete(inflightKey);
   }
 }
 

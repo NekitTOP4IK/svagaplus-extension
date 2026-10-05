@@ -60,6 +60,7 @@ let socket: ReturnType<NonNullable<typeof io>> | null = null;
 let styleRafPending = false;
 let initialFetchSucceeded = false;
 let channelRefreshTimer: number | null = null;
+let badgeGrantsRefreshTimer: number | null = null;
 let startupScanTimer: number | null = null;
 let startupScanGeneration = 0;
 let startupScanSeenLogins = new Set<string>();
@@ -84,6 +85,9 @@ const VISIBILITY_RECOVERY_DEBOUNCE_MS = 5_000;
 const REPROCESS_CHUNK_SIZE = 32;
 // Предел, который принимает обработчик FETCH_CHANNEL_BADGES в app/background.
 const VIEWER_BATCH_MAX = 100;
+// channel_refresh и badge_grants_updated приходят всем зрителям канала
+// одновременно; разброс не даёт им разом ударить по /badges.
+const CHANNEL_REFRESH_JITTER_MS = 5_000;
 
 function scheduleDynamicStyles(): void {
   if (styleRafPending) return;
@@ -559,6 +563,8 @@ function startStartupScan(channelName: string, forceRefresh = false): void {
 function resetChannelState(clearCache = true): void {
   if (channelRefreshTimer) clearTimeout(channelRefreshTimer);
   channelRefreshTimer = null;
+  if (badgeGrantsRefreshTimer) clearTimeout(badgeGrantsRefreshTimer);
+  badgeGrantsRefreshTimer = null;
   stopStartupScan();
   initialFetchSucceeded = false;
   if (socket) socket.disconnect();
@@ -644,7 +650,7 @@ function initSocket(channelName: string): void {
       channelRefreshTimer = window.setTimeout(() => {
         channelRefreshTimer = null;
         void fetchBadges(channelName);
-      }, Math.random() * 5000);
+      }, Math.random() * CHANNEL_REFRESH_JITTER_MS);
       return;
     }
     if (msg.type === 'viewer_refresh') {
@@ -728,8 +734,22 @@ function initSocket(channelName: string): void {
   socket.on('badge_grants_updated', (msg) => {
     if (DEBUG) console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
     if (!msg || typeof msg.channel !== 'string') return;
-    const payload = { channel: normalizeLogin(msg.channel) };
-    for (const listener of badgeGrantListeners) listener(payload);
+    const channel = normalizeLogin(msg.channel);
+    if (channel !== normalizeLogin(channelName)) return;
+    // Сброс сразу, а не после разброса: события из соседних вкладок того же
+    // канала совпадают по времени, и поздняя инвалидация из другой вкладки
+    // иначе обесценивала бы уже летящий запрос.
+    invalidateViewerBadgeCache(channelName);
+    browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
+    if (badgeGrantsRefreshTimer) return;
+    badgeGrantsRefreshTimer = window.setTimeout(async () => {
+      badgeGrantsRefreshTimer = null;
+      if (normalizeLogin(channelName) !== currentChannelName) return;
+      const logins = collectVisibleLogins();
+      await fetchBadges(channelName, logins);
+      for (const login of logins) refreshUserInChat(login);
+      for (const listener of badgeGrantListeners) listener({ channel });
+    }, Math.random() * CHANNEL_REFRESH_JITTER_MS);
   });
 }
 

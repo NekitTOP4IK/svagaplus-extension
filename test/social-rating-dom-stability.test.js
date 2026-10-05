@@ -1,5 +1,6 @@
 const assert = require('assert');
 const { JSDOM } = require('jsdom');
+require('./helpers/build-globals').defineBuildGlobals();
 
 function setupDom(html) {
   const dom = new JSDOM(html, { url: 'https://www.twitch.tv/testchannel' });

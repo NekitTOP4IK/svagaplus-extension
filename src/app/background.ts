@@ -19,14 +19,10 @@ import {
   castVote,
   deleteAlias,
   exportAliases,
-  fetchBadgeGrants,
   fetchRatingForCard,
   getAliases,
-  getOrFetchChannelGrantsForLogin,
   getUserRating,
   importAliases,
-  invalidateChannelBadgeGrants,
-  prefetchChannelBadgeGrants,
   refreshMe,
   setAlias,
   syncAliasesIfStale,
@@ -59,9 +55,15 @@ const MAX_ALIAS_LENGTH = 64;
 const MAX_IMPORT_ALIASES = 1000;
 const CHANNEL_BADGES_CACHE_TTL_MS = 10 * 60 * 1000;
 const CHANNEL_BADGES_REQUEST_TIMEOUT_MS = 10_000;
+const CHANNEL_BADGES_BATCH_MAX = 100;
+const CHANNEL_BADGES_PRUNE_INTERVAL_MS = 60_000;
+const COOLDOWN_STORAGE_KEY = 'apiCooldown';
 
 type ChannelBadgeViewerEntry = {
   expiresAt: number;
+  // Order in which the data was observed: a request's start, or the moment of a realtime upsert.
+  // A response that resolves late must not overwrite data observed after it was sent.
+  seq: number;
   data: Record<string, unknown>;
 };
 
@@ -86,12 +88,47 @@ const channelBadgeInflight = new Map<string, Promise<ChannelBadgesResponse>>();
 const channelBadgeViewerInflight = new Map<string, ChannelBadgeViewerInflightEntry>();
 const channelBadgeGenerations = new Map<string, number>();
 const channelBadgeGenerationSnapshotRefs = new Map<string, number>();
+type ChannelBadgeFetchWaiter = {
+  remaining: Set<string>;
+  ok: boolean;
+  stale: boolean;
+  resolve: (response: ChannelBadgesResponse) => void;
+};
+
 const channelBadgeFetchBatches = new Map<string, {
   pending: Set<string>;
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
-  waiters: Map<string, Array<(response: ChannelBadgesResponse) => void>>;
+  waiters: Map<string, ChannelBadgeFetchWaiter[]>;
 }>();
+let channelBadgeSeq = 0;
+let lastChannelBadgesPruneAt = 0;
+
+// MV3 service worker засыпает после ~30 с простоя и теряет память. Без этого
+// 10-минутный cooldown на 404 для каналов без бэкенда сбрасывался бы при
+// каждом пробуждении.
+const apiCooldownRestored = restoreApiCooldown();
+
+async function restoreApiCooldown(): Promise<void> {
+  const area = browser.storage?.session;
+  if (!area) return;
+  try {
+    const stored = await area.get(COOLDOWN_STORAGE_KEY);
+    apiCooldown.restore(stored?.[COOLDOWN_STORAGE_KEY]);
+  } catch {
+    return;
+  }
+  const persist = (entries: Record<string, unknown>) => {
+    area.set({ [COOLDOWN_STORAGE_KEY]: entries }).catch(() => {});
+  };
+  apiCooldown.setChangeListener(persist);
+  persist(apiCooldown.snapshot());
+}
+
+function nextChannelBadgeSeq(): number {
+  channelBadgeSeq += 1;
+  return channelBadgeSeq;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -184,6 +221,8 @@ function cacheViewerEntry(channelLogin: string, login: string, entry: ChannelBad
   const normalizedChannel = channelLogin.toLowerCase();
   const normalizedLogin = login.toLowerCase();
   const key = channelViewerKey(normalizedChannel, normalizedLogin);
+  const existing = channelBadgeViewersCache.get(key);
+  if (existing && existing.seq > entry.seq) return;
   channelBadgeViewersCache.set(key, entry);
   let keys = channelBadgeViewerIndex.get(normalizedLogin);
   if (!keys) {
@@ -201,6 +240,21 @@ function deleteViewerEntry(key: string): void {
   const keys = channelBadgeViewerIndex.get(login);
   keys?.delete(key);
   if (keys?.size === 0) channelBadgeViewerIndex.delete(login);
+}
+
+// Firefox event page может жить часами, а записи иначе удаляются только при
+// перезаписи — карты росли бы на каждого уникального чаттера.
+function pruneExpiredChannelBadges(now = Date.now()): void {
+  if (now - lastChannelBadgesPruneAt < CHANNEL_BADGES_PRUNE_INTERVAL_MS) return;
+  lastChannelBadgesPruneAt = now;
+  for (const [key, entry] of Array.from(channelBadgeViewersCache)) {
+    if (entry.expiresAt <= now) deleteViewerEntry(key);
+  }
+  for (const cache of [channelBadgeAssetsCache, channelBadgeFontPresetsCache]) {
+    for (const [key, entry] of Array.from(cache)) {
+      if (entry.expiresAt <= now) cache.delete(key);
+    }
+  }
 }
 
 function emptyChannelBadgesResponse(logins: string[]): ChannelBadgesResponse {
@@ -289,6 +343,7 @@ export function __fetchChannelBadges(channelLogin: string, logins: string[], for
 export function __seedChannelViewer(channelLogin: string, login: string, data: Record<string, unknown>): void {
   cacheViewerEntry(channelLogin, login, {
     expiresAt: Date.now() + 600_000,
+    seq: nextChannelBadgeSeq(),
     data: data as never,
   });
 }
@@ -296,10 +351,13 @@ export function __seedChannelViewer(channelLogin: string, login: string, data: R
 function cacheChannelBadges(
   channelLogin: string,
   response: ChannelBadgesResponse,
-  requestedLogins: string[] = Object.keys(response.viewers),
+  requestedLogins: string[],
+  seq: number,
 ): void {
   if (!response.ok) return;
-  const expiresAt = Date.now() + CHANNEL_BADGES_CACHE_TTL_MS;
+  const now = Date.now();
+  pruneExpiredChannelBadges(now);
+  const expiresAt = now + CHANNEL_BADGES_CACHE_TTL_MS;
 
   for (const [badgeId, badge] of Object.entries(response.badges)) {
     channelBadgeAssetsCache.set(badgeId, { expiresAt, data: badge });
@@ -317,7 +375,7 @@ function cacheChannelBadges(
         .map((badgeId) => (typeof badgeId === 'string' || typeof badgeId === 'number' ? String(badgeId) : ''))
         .filter(Boolean)
       : [];
-    cacheViewerEntry(channelLogin, login, { expiresAt, data: viewerData });
+    cacheViewerEntry(channelLogin, login, { expiresAt, seq, data: viewerData });
   }
 }
 
@@ -328,7 +386,9 @@ function upsertChannelBadgeViewer(
   badges?: Record<string, unknown>,
   fontPresets?: Record<string, unknown>,
 ): void {
-  const expiresAt = Date.now() + CHANNEL_BADGES_CACHE_TTL_MS;
+  const now = Date.now();
+  pruneExpiredChannelBadges(now);
+  const expiresAt = now + CHANNEL_BADGES_CACHE_TTL_MS;
   const normalizedLogin = login.toLowerCase();
   const viewerData = { ...viewer };
   const badgeIds = Array.isArray(viewerData.badge_ids)
@@ -339,6 +399,7 @@ function upsertChannelBadgeViewer(
   viewerData.badge_ids = badgeIds;
   cacheViewerEntry(channelLogin, normalizedLogin, {
     expiresAt,
+    seq: nextChannelBadgeSeq(),
     data: viewerData,
   });
   if (badges && typeof badges === 'object') {
@@ -354,6 +415,7 @@ function upsertChannelBadgeViewer(
 }
 
 async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
+  await apiCooldownRestored;
   const coolKey = channelBadgesKey(channelLogin);
   if (apiCooldown.isBlocked(coolKey)) {
     return emptyChannelBadgesResponse(logins);
@@ -367,6 +429,7 @@ async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: st
   if (inflight) return inflight;
 
   retainChannelBadgeGenerationSnapshot(channelLogin, generationSnapshot);
+  const seq = nextChannelBadgeSeq();
   let request!: Promise<ChannelBadgesResponse>;
   request = (async (): Promise<ChannelBadgesResponse> => {
     try {
@@ -386,7 +449,7 @@ async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: st
           const empty = emptyChannelBadgesResponse(logins);
           // cacheChannelBadges only stores when ok:true — empty has ok:true
           if (res.status === 404) {
-            cacheChannelBadges(channelLogin, empty, logins);
+            cacheChannelBadges(channelLogin, empty, logins, seq);
           }
           return empty;
         }
@@ -398,11 +461,14 @@ async function fetchChannelBadgesFromBackendNow(channelLogin: string, logins: st
           font_presets: data?.font_presets && typeof data.font_presets === 'object' ? data.font_presets : {},
           viewers: data?.viewers && typeof data.viewers === 'object' ? data.viewers : {},
         };
-        if (!isChannelBadgeGenerationCurrent(channelLogin, generationSnapshot)) {
-          return staleChannelBadgesResponse();
-        }
-        cacheChannelBadges(channelLogin, response, logins);
-        return response;
+        // Инвалидация одного зрителя не должна выбрасывать ответ на весь батч:
+        // иначе один WS-апдейт во время запроса на 100 логинов перезапрашивал всех.
+        const currentLogins = logins.filter(
+          (login) => channelBadgeGeneration(channelLogin, login) === generationSnapshot.get(login),
+        );
+        if (currentLogins.length === 0) return staleChannelBadgesResponse();
+        cacheChannelBadges(channelLogin, response, currentLogins, seq);
+        return currentLogins.length === logins.length ? response : { ...response, stale: true };
       } finally {
         clearTimeout(timeout);
       }
@@ -450,13 +516,13 @@ async function flushChannelBadgeFetchBatch(channelLogin: string): Promise<void> 
 
   try {
     while (batch.pending.size > 0) {
-      const logins = Array.from(batch.pending).slice(0, 100);
+      const logins = Array.from(batch.pending).slice(0, CHANNEL_BADGES_BATCH_MAX);
       for (const login of logins) batch.pending.delete(login);
       const response = await fetchChannelBadgesFromBackendNow(channelLogin, logins);
       for (const login of logins) {
         const waiters = batch.waiters.get(login) ?? [];
         batch.waiters.delete(login);
-        for (const resolve of waiters) resolve(response);
+        for (const waiter of waiters) settleChannelBadgeFetchWaiter(waiter, login, response);
       }
     }
   } finally {
@@ -464,13 +530,30 @@ async function flushChannelBadgeFetchBatch(channelLogin: string): Promise<void> 
   }
 }
 
+// Логины одного вызывающего могут попасть в разные чанки по 100, если в окно
+// дебаунса набились чужие. Резолв по первому чанку отдавал бы вызывающему
+// неполный кэш, и он принимал недогруженных зрителей за сбой.
+function settleChannelBadgeFetchWaiter(
+  waiter: ChannelBadgeFetchWaiter,
+  login: string,
+  response: ChannelBadgesResponse,
+): void {
+  waiter.remaining.delete(login);
+  if (response.ok) waiter.ok = true;
+  if (response.stale) waiter.stale = true;
+  if (waiter.remaining.size > 0) return;
+  if (waiter.stale) waiter.resolve(staleChannelBadgesResponse());
+  else waiter.resolve({ ok: waiter.ok, badges: {}, font_presets: {}, viewers: {} });
+}
+
 function queueChannelBadgeFetch(channelLogin: string, logins: string[]): Promise<ChannelBadgesResponse> {
   const batch = getChannelBadgeFetchBatch(channelLogin);
   return new Promise((resolve) => {
+    const waiter: ChannelBadgeFetchWaiter = { remaining: new Set(logins), ok: false, stale: false, resolve };
     for (const login of logins) {
       batch.pending.add(login);
       const waiters = batch.waiters.get(login) ?? [];
-      waiters.push(resolve);
+      waiters.push(waiter);
       batch.waiters.set(login, waiters);
     }
     if (!batch.running && !batch.timer) {
@@ -825,25 +908,11 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
       if (!login || !channelLogin) return badRequest();
       return fetchRatingForCard(login, channelLogin);
     }
-    case 'FETCH_BADGE_GRANTS': {
-      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
-      const loginsValue = (message as { logins?: unknown }).logins;
-      if (!channelLogin || !Array.isArray(loginsValue) || loginsValue.length > 100) return badRequest();
-
-      const logins: string[] = [];
-      for (const value of loginsValue) {
-        const login = normalizeLogin(value);
-        if (!login) return badRequest();
-        logins.push(login);
-      }
-
-      return fetchBadgeGrants(channelLogin, logins);
-    }
     case 'FETCH_CHANNEL_BADGES': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
       const loginsValue = (message as { logins?: unknown }).logins;
       const force = !!(message as { force?: unknown }).force;
-      if (!channelLogin || !Array.isArray(loginsValue) || loginsValue.length > 100) return badRequest();
+      if (!channelLogin || !Array.isArray(loginsValue) || loginsValue.length > CHANNEL_BADGES_BATCH_MAX) return badRequest();
 
       const logins: string[] = [];
       for (const value of loginsValue) {
@@ -909,23 +978,6 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         isRecord(font_presets) ? font_presets : undefined,
       );
       return Promise.resolve({ ok: true });
-    }
-    case 'PREFETCH_CHANNEL_BADGE_GRANTS': {
-      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
-      if (!channelLogin) return badRequest();
-      return prefetchChannelBadgeGrants(channelLogin).then(() => ({ ok: true }));
-    }
-    case 'REFRESH_CHANNEL_BADGE_GRANTS': {
-      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
-      if (!channelLogin) return badRequest();
-      invalidateChannelBadgeGrants(channelLogin);
-      return prefetchChannelBadgeGrants(channelLogin).then(() => ({ ok: true }));
-    }
-    case 'GET_CHANNEL_BADGE_GRANTS_FOR_LOGIN': {
-      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
-      const login = normalizeLogin((message as { login?: unknown }).login);
-      if (!channelLogin || !login) return badRequest();
-      return getOrFetchChannelGrantsForLogin(channelLogin, login);
     }
     case 'CAST_VOTE': {
       const login = normalizeLogin((message as { login?: unknown }).login);

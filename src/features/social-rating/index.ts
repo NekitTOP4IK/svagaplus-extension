@@ -3,7 +3,7 @@ import { BACKEND_URL } from '../../shared/config';
 import { extractCurrentChannel } from './channel';
 import { MODVIEW_CARD_SELECTOR, detectCardLogin, type DetectedCard } from './card-detector';
 import { injectBadge, updateBadgeScore, refreshOpenCardAwards } from './cards';
-import { fetchRating, prefetchChannelBadgeGrants, refreshChannelBadgeGrants } from './api';
+import { fetchRating } from './api';
 import { connectWebSocket, disconnectWebSocket } from './ws';
 import {
   processNativeChatBadges,
@@ -62,7 +62,6 @@ const BATCH_REAPPLY_SELECTOR = [
   '.inline-private-callout-line__icon',
   '.seventv-confirm-prompt-body',
 ].join(', ');
-let badgeGrantsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 function isAliasOwnedMutation(node: Node): boolean {
   const el = node instanceof Element ? node : node.parentElement;
@@ -323,19 +322,16 @@ function initWebSocket(): void {
   connectWebSocket(
     channel,
     (login, score, socialScore) => updateBadgeScore(login, score, socialScore),
-    (updatedChannel) => scheduleBadgeGrantsRefresh(updatedChannel),
+    (updatedChannel) => void refreshBadgeGrants(updatedChannel),
   );
 }
 
-function scheduleBadgeGrantsRefresh(channelLogin: string): void {
-  if (badgeGrantsRefreshTimer) clearTimeout(badgeGrantsRefreshTimer);
-  badgeGrantsRefreshTimer = setTimeout(async () => {
-    badgeGrantsRefreshTimer = null;
-    if (getCurrentChannel() !== channelLogin) return;
-    await refreshChannelBadgeGrants(channelLogin);
-    await refreshVisibleChatBadges(channelLogin);
-    await refreshOpenCardAwards(channelLogin);
-  }, 120);
+// Кэш уже сброшен, а событие разнесено по времени в tribute-badges:
+// badge_grants_updated приходит всем зрителям канала разом.
+async function refreshBadgeGrants(channelLogin: string): Promise<void> {
+  if (getCurrentChannel() !== channelLogin) return;
+  await refreshVisibleChatBadges(channelLogin);
+  await refreshOpenCardAwards(channelLogin);
 }
 
 let lastChannel = '';
@@ -347,7 +343,6 @@ function watchNavigation(): void {
       disconnectWebSocket();
       initWebSocket();
       scheduleBatchReapply();
-      prefetchChannelBadgeGrants(ch).catch(() => {});
     }
   };
   const origPush = history.pushState.bind(history);
@@ -365,9 +360,6 @@ export async function startSocialRatingContent(): Promise<void> {
   await initAliasManager();
 
   const startChannel = getCurrentChannel();
-  if (startChannel) {
-    prefetchChannelBadgeGrants(startChannel).catch(() => {});
-  }
 
   applyAliasesToAllChat();
   // startChannel уже вычислен выше — незачем звать getCurrentChannel на каждое сообщение.
