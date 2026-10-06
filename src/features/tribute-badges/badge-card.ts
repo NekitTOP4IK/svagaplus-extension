@@ -3,7 +3,8 @@ export interface BadgeCardData {
   name: string;
   image_url: string;
   rarity: string | null;
-  description: string;
+  description: string | null;
+  how_to_get: string | null;
   owners: number;
   context: { channel: string | null; period: string | null };
 }
@@ -18,12 +19,11 @@ const RARITY_LABELS: Record<string, string> = {
   service: 'Служебный',
 };
 
-const KIND_LABELS: Record<string, string> = {
-  collectible: 'Коллекционный',
-  service: 'Служебный',
-  sub: 'За подписку',
-  social: 'Соц. рейтинг',
-};
+const SHIMMER_RARITIES = new Set(['rare', 'epic', 'mythic', 'service']);
+const CARD_WIDTH = 296;
+const GAP = 10;
+const EDGE = 8;
+const OPEN_CLASS = 'tcb-bcard-open';
 
 let popover: HTMLElement | null = null;
 let ready = false;
@@ -42,7 +42,14 @@ function ownersText(card: BadgeCardData): string {
   const word = card.kind === 'sub'
     ? plural(card.owners, 'подписчик с ним', 'подписчика с ним', 'подписчиков с ним')
     : plural(card.owners, 'владелец', 'владельца', 'владельцев');
-  return `${card.owners} ${word}`;
+  return `${card.owners.toLocaleString('ru-RU')} ${word}`;
+}
+
+function kindText(card: BadgeCardData): string {
+  const { channel, period } = card.context;
+  if (card.kind === 'sub') return channel ? `Подписка на ${channel}` : 'За подписку';
+  if (card.kind === 'social') return ['Соц. рейтинг', period].filter(Boolean).join(' · ');
+  return 'Коллекционный';
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -52,44 +59,82 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
   return node;
 }
 
+function rarityTag(rarity: string): HTMLElement {
+  const tag = element('span', `tcb-rtag tcb-rtag--${rarity}${SHIMMER_RARITIES.has(rarity) ? ' tcb-rtag--animated' : ''}`);
+  tag.append(element('span', 'tcb-rtag__gem'), document.createTextNode(RARITY_LABELS[rarity]));
+  return tag;
+}
+
 function place(card: HTMLElement, anchor: Element): void {
   const rect = anchor.getBoundingClientRect();
-  const width = 288;
-  const left = Math.min(Math.max(8, rect.left - 16), window.innerWidth - width - 8);
-  const below = rect.bottom + 8;
+  const center = rect.left + rect.width / 2;
+  const left = Math.min(Math.max(EDGE, center - 26), window.innerWidth - CARD_WIDTH - EDGE);
   card.style.left = `${left}px`;
-  card.style.top = `${below}px`;
+  card.style.setProperty('--tcb-arrow-x', `${Math.min(Math.max(center - left, 16), CARD_WIDTH - 16)}px`);
   const height = card.offsetHeight;
-  if (height && below + height > window.innerHeight - 8) {
-    card.style.top = `${Math.max(8, rect.top - height - 8)}px`;
-  }
+  const below = rect.bottom + GAP;
+  const above = height > 0 && below + height > window.innerHeight - EDGE && rect.top - GAP - height >= EDGE;
+  card.classList.toggle('tcb-bcard--above', above);
+  card.style.top = `${above ? rect.top - GAP - height : below}px`;
+}
+
+function shell(rarity: string): HTMLElement {
+  const root = element('div', 'tcb-bcard');
+  root.setAttribute('role', 'dialog');
+  root.dataset.rarity = rarity;
+  return root;
+}
+
+function renderSkeleton(): HTMLElement {
+  const root = shell('none');
+  root.classList.add('tcb-bcard--loading');
+  root.setAttribute('aria-busy', 'true');
+  root.setAttribute('aria-label', 'Загрузка бейджа');
+  const head = element('div', 'tcb-bcard__head');
+  const lines = element('div', 'tcb-bcard__titles');
+  lines.append(element('span', 'tcb-bcard__bone tcb-bcard__bone--name'), element('span', 'tcb-bcard__bone tcb-bcard__bone--tag'));
+  head.append(element('span', 'tcb-bcard__art tcb-bcard__bone'), lines);
+  const body = element('div', 'tcb-bcard__body');
+  body.append(element('span', 'tcb-bcard__bone'), element('span', 'tcb-bcard__bone tcb-bcard__bone--short'));
+  root.append(head, body);
+  return root;
 }
 
 function renderCard(card: BadgeCardData, url: string): HTMLElement {
-  const root = element('div', 'tcb-card');
-  root.setAttribute('role', 'dialog');
+  const rarity = card.rarity && RARITY_LABELS[card.rarity] ? card.rarity : null;
+  const root = shell(rarity || 'none');
   root.setAttribute('aria-label', card.name);
-  root.dataset.rarity = card.rarity || 'none';
 
-  const head = element('div', 'tcb-card__head');
-  const image = element('img', 'tcb-card__img');
+  const head = element('div', 'tcb-bcard__head');
+  const art = element('span', 'tcb-bcard__art');
+  const image = element('img', 'tcb-bcard__img');
   image.src = card.image_url;
   image.alt = '';
-  const titles = element('div', 'tcb-card__titles');
-  titles.append(element('div', 'tcb-card__name', card.name));
-  titles.append(card.rarity && RARITY_LABELS[card.rarity]
-    ? element('span', 'tcb-card__tag', RARITY_LABELS[card.rarity])
-    : element('span', 'tcb-card__kind', KIND_LABELS[card.kind] || ''));
-  head.append(image, titles);
+  art.append(image);
+  const titles = element('div', 'tcb-bcard__titles');
+  titles.append(element('div', 'tcb-bcard__name', card.name));
+  titles.append(rarity ? rarityTag(rarity) : element('span', 'tcb-bcard__kind', kindText(card)));
+  head.append(art, titles);
+  root.append(head);
 
-  const foot = element('div', 'tcb-card__foot');
-  const link = element('a', 'tcb-card__link', 'Страница бейджа');
+  if (card.description || card.how_to_get) {
+    const body = element('div', 'tcb-bcard__body');
+    if (card.description) body.append(element('p', 'tcb-bcard__desc', card.description));
+    if (card.how_to_get) {
+      const how = element('div', 'tcb-bcard__how');
+      how.append(element('span', 'tcb-bcard__how-label', 'Как получить'), element('p', 'tcb-bcard__how-text', card.how_to_get));
+      body.append(how);
+    }
+    root.append(body);
+  }
+
+  const foot = element('div', 'tcb-bcard__foot');
+  const link = element('a', 'tcb-bcard__link', 'Страница бейджа');
   link.href = url;
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
-  foot.append(element('span', 'tcb-card__owners', ownersText(card)), link);
-
-  root.append(head, element('p', 'tcb-card__desc', card.description), foot);
+  foot.append(element('span', 'tcb-bcard__owners', ownersText(card)), link);
+  root.append(foot);
   return root;
 }
 
@@ -97,15 +142,15 @@ export function closeBadgeCard(): void {
   requestSeq += 1;
   popover?.remove();
   popover = null;
+  document.documentElement.classList.remove(OPEN_CLASS);
 }
 
 async function openBadgeCard(anchor: HTMLElement, page: string, fetchCard: BadgeCardFetcher): Promise<void> {
   closeBadgeCard();
   const seq = requestSeq;
-  const loading = element('div', 'tcb-card tcb-card--loading', 'Загрузка…');
-  loading.setAttribute('role', 'dialog');
-  loading.setAttribute('aria-busy', 'true');
+  const loading = renderSkeleton();
   document.body.appendChild(loading);
+  document.documentElement.classList.add(OPEN_CLASS);
   popover = loading;
   place(loading, anchor);
 
@@ -116,6 +161,7 @@ async function openBadgeCard(anchor: HTMLElement, page: string, fetchCard: Badge
     return;
   }
   const filled = renderCard(result.card, result.url);
+  filled.classList.add('tcb-bcard--settled');
   loading.replaceWith(filled);
   popover = filled;
   place(filled, anchor);
@@ -143,4 +189,8 @@ export function initBadgeCards(fetchCard: BadgeCardFetcher): void {
   document.addEventListener('wheel', (event) => {
     if (popover && !(event.target instanceof Node && popover.contains(event.target))) closeBadgeCard();
   }, { passive: true });
+
+  window.addEventListener('resize', () => {
+    if (popover) closeBadgeCard();
+  });
 }
