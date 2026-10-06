@@ -26,6 +26,11 @@ const EDGE = 8;
 const OPEN_CLASS = 'tcb-bcard-open';
 
 let popover: HTMLElement | null = null;
+let anchor: HTMLElement | null = null;
+let viewport: Element | null = null;
+let anchorTop = 0;
+let anchorLeft = 0;
+let followFrame = 0;
 let ready = false;
 let requestSeq = 0;
 
@@ -76,6 +81,38 @@ function place(card: HTMLElement, anchor: Element): void {
   const above = height > 0 && below + height > window.innerHeight - EDGE && rect.top - GAP - height >= EDGE;
   card.classList.toggle('tcb-bcard--above', above);
   card.style.top = `${above ? rect.top - GAP - height : below}px`;
+}
+
+function scrollContainer(node: Element): Element | null {
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    if (/(auto|scroll|overlay)/.test(window.getComputedStyle(parent).overflowY)) return parent;
+  }
+  return null;
+}
+
+// Chat lines move without any event we could listen to (new messages, 7TV
+// re-renders, Twitch trimming history), so the card tracks its badge per frame.
+function follow(): void {
+  followFrame = 0;
+  if (!popover || !anchor) return;
+  if (!anchor.isConnected) {
+    closeBadgeCard();
+    return;
+  }
+  const rect = anchor.getBoundingClientRect();
+  if (viewport) {
+    const bounds = viewport.getBoundingClientRect();
+    if (rect.bottom <= bounds.top || rect.top >= bounds.bottom) {
+      closeBadgeCard();
+      return;
+    }
+  }
+  if (rect.top !== anchorTop || rect.left !== anchorLeft) {
+    anchorTop = rect.top;
+    anchorLeft = rect.left;
+    place(popover, anchor);
+  }
+  followFrame = window.requestAnimationFrame(follow);
 }
 
 function shell(rarity: string): HTMLElement {
@@ -142,17 +179,27 @@ export function closeBadgeCard(): void {
   requestSeq += 1;
   popover?.remove();
   popover = null;
+  anchor = null;
+  viewport = null;
+  if (followFrame) window.cancelAnimationFrame(followFrame);
+  followFrame = 0;
   document.documentElement.classList.remove(OPEN_CLASS);
 }
 
-async function openBadgeCard(anchor: HTMLElement, page: string, fetchCard: BadgeCardFetcher): Promise<void> {
+async function openBadgeCard(badge: HTMLElement, page: string, fetchCard: BadgeCardFetcher): Promise<void> {
   closeBadgeCard();
   const seq = requestSeq;
   const loading = renderSkeleton();
   document.body.appendChild(loading);
   document.documentElement.classList.add(OPEN_CLASS);
   popover = loading;
-  place(loading, anchor);
+  anchor = badge;
+  viewport = scrollContainer(badge);
+  const rect = badge.getBoundingClientRect();
+  anchorTop = rect.top;
+  anchorLeft = rect.left;
+  place(loading, badge);
+  followFrame = window.requestAnimationFrame(follow);
 
   const result = await fetchCard(page);
   if (seq !== requestSeq || popover !== loading) return;
@@ -164,7 +211,7 @@ async function openBadgeCard(anchor: HTMLElement, page: string, fetchCard: Badge
   filled.classList.add('tcb-bcard--settled');
   loading.replaceWith(filled);
   popover = filled;
-  place(filled, anchor);
+  place(filled, badge);
 }
 
 export function initBadgeCards(fetchCard: BadgeCardFetcher): void {
@@ -176,7 +223,8 @@ export function initBadgeCards(fetchCard: BadgeCardFetcher): void {
     if (target instanceof HTMLElement && target.classList.contains('tcb-badge-img') && target.dataset.tcbPage) {
       event.preventDefault();
       event.stopPropagation();
-      void openBadgeCard(target, target.dataset.tcbPage, fetchCard);
+      if (popover && target === anchor) closeBadgeCard();
+      else void openBadgeCard(target, target.dataset.tcbPage, fetchCard);
       return;
     }
     if (popover && !(target instanceof Node && popover.contains(target))) closeBadgeCard();

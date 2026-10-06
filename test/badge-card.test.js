@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 const test = require('node:test');
 
-const dom = new JSDOM('<div class="chat"><img class="tcb-badge-img" data-tcb-page="/badges/sub/12" src="https://cdn.test/s.png"><img class="tcb-badge-img" src="https://cdn.test/x.png"><img class="tcb-badge-img" data-tcb-page="/badges/collectible/c1" src="https://cdn.test/c.png"></div>', { url: 'https://www.twitch.tv/channel' });
+const dom = new JSDOM('<div class="chat"><img class="tcb-badge-img" data-tcb-page="/badges/sub/12" src="https://cdn.test/s.png"><img class="tcb-badge-img" src="https://cdn.test/x.png"><img class="tcb-badge-img" data-tcb-page="/badges/collectible/c1" src="https://cdn.test/c.png"></div>', { url: 'https://www.twitch.tv/channel', pretendToBeVisual: true });
 global.window = dom.window;
 global.document = dom.window.document;
 global.HTMLElement = dom.window.HTMLElement;
