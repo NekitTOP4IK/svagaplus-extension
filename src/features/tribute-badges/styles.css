@@ -140,7 +140,7 @@
 .tcb-bcard[data-rarity='rare'] { --r: #38bdf8; --r-ink: #bae6fd; --r-glow: rgba(56, 189, 248, 0.32); }
 .tcb-bcard[data-rarity='epic'] { --r: #d946ef; --r-ink: #f5d0fe; --r-glow: rgba(217, 70, 239, 0.36); }
 .tcb-bcard[data-rarity='mythic'] { --r: #fbbf24; --r-ink: #fef3c7; --r-glow: rgba(251, 191, 36, 0.36); }
-.tcb-bcard[data-rarity='service'] { --r: #a5b4fc; --r-ink: #ffffff; --r-glow: rgba(129, 140, 248, 0.42); }
+.tcb-bcard[data-rarity='service'] { --r: #f87171; --r-ink: #ffffff; --r-glow: rgba(239, 68, 68, 0.45); }
 .tcb-bcard[data-rarity='none'] { --r: #adadb8; --r-glow: rgba(0, 0, 0, 0); }
 
 .tcb-bcard::before {
@@ -218,12 +218,10 @@
 
 .tcb-bcard__name {
   max-width: 100%;
-  overflow: hidden;
   font-size: 17px;
   font-weight: 400;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   color: #efeff1;
 }
 
@@ -240,14 +238,10 @@
 }
 
 .tcb-bcard__desc {
-  display: -webkit-box;
   margin: 0 !important;
-  overflow: hidden;
   font-size: 13px;
   color: #adadb8;
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .tcb-bcard__how {
@@ -267,14 +261,10 @@
 }
 
 .tcb-bcard__how-text {
-  display: -webkit-box;
   margin: 2px 0 0 !important;
-  overflow: hidden;
   font-size: 13px;
   color: #efeff1;
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .tcb-bcard__foot {
@@ -367,7 +357,7 @@
 .tcb-rtag--rare { --r: #38bdf8; --r-ink: #bae6fd; }
 .tcb-rtag--epic { --r: #d946ef; --r-ink: #f5d0fe; }
 .tcb-rtag--mythic { --r: #fbbf24; --r-ink: #fef3c7; }
-.tcb-rtag--service { --r: #a5b4fc; --r-ink: #ffffff; }
+.tcb-rtag--service { --r: #f87171; --r-ink: #ffffff; }
 
 .tcb-rtag__gem {
   flex: none;
@@ -421,7 +411,7 @@
 
 .tcb-rtag--service::before {
   width: calc(100% + 180px);
-  background: linear-gradient(90deg, #be185d, #b45309, #15803d, #0e7490, #4338ca, #a21caf, #be185d) 0 0 / 180px 100% repeat-x;
+  background: linear-gradient(90deg, #7f1d1d, #dc2626, #9f1239, #ea580c, #b91c1c, #7f1d1d) 0 0 / 180px 100% repeat-x;
 }
 
 .tcb-rtag--service.tcb-rtag--animated::before {
