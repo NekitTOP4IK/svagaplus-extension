@@ -30,6 +30,7 @@ import {
   syncAliasesWithServer,
 } from '../features/social-rating/background';
 import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
+import { startUpdateChecks } from '../features/update-notice/background';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -1069,6 +1070,8 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
 browser.runtime.onInstalled.addListener(() => {
   void validateStoredAccount();
 });
+
+startUpdateChecks();
 
 browser.runtime.onStartup.addListener(() => {
   void validateStoredAccount();

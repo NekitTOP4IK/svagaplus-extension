@@ -2,6 +2,7 @@ import browser from '../shared/browser';
 import { getExtensionSettings } from '../shared/storage';
 import { startTributeBadgesContent } from '../features/tribute-badges';
 import { startSocialRatingContent } from '../features/social-rating';
+import { startChatUpdateNotice } from '../features/update-notice';
 
 let socialRatingStarted = false;
 
@@ -16,6 +17,7 @@ function maybeStartSocialRating(enabled: boolean): void {
 }
 
 startTributeBadgesContent();
+startChatUpdateNotice();
 
 getExtensionSettings()
   .then((settings) => {

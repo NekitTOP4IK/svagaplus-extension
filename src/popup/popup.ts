@@ -4,6 +4,7 @@ import { getChannelLoginFromUrl } from '../shared/twitch';
 import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../shared/types';
 import { aliasExportFilename, formatAliasCount, parseAliasImport, toSortedAliasItems, type AliasItem } from './alias-list';
 import { buildPopupErrorBanner, type PopupErrorBanner } from './error-banner';
+import { startPopupUpdateNotice } from '../features/update-notice';
 import { derivePopupView, shouldApplyMetricsResponse, type AccountView, type PopupMetricsState, type PopupRating, type PopupState, type UiStatus } from './view-model';
 
 type ViewerAccountResponse = {
@@ -533,6 +534,8 @@ function bindEvents(): void {
 bindEvents();
 bindAliasEvents();
 render();
+const updateNotice = document.getElementById('updateNotice');
+if (updateNotice) startPopupUpdateNotice(updateNotice);
 void loadState();
 void loadAliases();
 

@@ -48,6 +48,12 @@ function stubExtensionApis() {
       },
       onChanged: noopListener,
     },
+    alarms: {
+      onAlarm: noopListener,
+      get: () => Promise.resolve(undefined),
+      create: () => Promise.resolve(),
+      clear: () => Promise.resolve(true),
+    },
     tabs: {
       query: () => Promise.resolve([]),
       sendMessage: () => Promise.resolve(null),

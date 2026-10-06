@@ -12,6 +12,7 @@
   },
   "permissions": [
     "storage",
+    "alarms",
     "identity",
     "tabs"
   ],
@@ -28,7 +29,8 @@
         "src/app/content.js"
       ],
       "css": [
-        "src/features/tribute-badges/styles.css"
+        "src/features/tribute-badges/styles.css",
+        "src/features/update-notice/notice.css"
       ],
       "run_at": "document_end"
     }

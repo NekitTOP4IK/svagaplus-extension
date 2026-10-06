@@ -1,5 +1,6 @@
 import browser from './browser';
 import type { ExtensionSettings, RuntimeChannelState, ViewerAccount, ViewerAuthFeedback } from './types';
+import { parseUpdateState, type UpdateState } from '../features/update-notice/model';
 
 const SETTINGS_KEY = 'svagaplus_settings';
 const VIEWER_ACCOUNT_KEY = 'svagaplus_viewer_account';
@@ -136,4 +137,15 @@ export async function setRuntimeChannelState(state: RuntimeChannelState): Promis
 
 export async function clearRuntimeChannelState(): Promise<void> {
   await browser.storage.local.remove(CHANNEL_STATE_KEY);
+}
+
+export const UPDATE_STATE_KEY = 'svagaplus_update_state';
+
+export async function getUpdateState(): Promise<UpdateState> {
+  return parseUpdateState(await readValue<unknown>(UPDATE_STATE_KEY));
+}
+
+export async function setUpdateState(state: UpdateState): Promise<UpdateState> {
+  await browser.storage.local.set({ [UPDATE_STATE_KEY]: state });
+  return state;
 }
