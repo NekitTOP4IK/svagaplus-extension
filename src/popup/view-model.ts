@@ -10,6 +10,8 @@ export type PrimaryAction = 'connect' | 'settings';
 
 export type RatingViewState = 'idle' | 'loading' | 'ready' | 'missing-channel' | 'unavailable' | 'error';
 
+export type MetricsLock = 'disabled' | 'signed-out';
+
 export interface PopupRating {
   score?: number;
   swag_score?: number;
@@ -59,6 +61,8 @@ export interface PopupView {
   customNicknamesEnabled: boolean;
   banner: PopupErrorBanner | null;
   metricsState: RatingViewState;
+  /** Set when the panel has nothing to show and collapses into a grey strip. */
+  metricsLock: MetricsLock | null;
   metricsText: string;
   metricsChannel: string;
   swagScore: number | null;
@@ -100,11 +104,18 @@ export function derivePopupView(state: PopupState): PopupView {
   const socialScore = Number.isSafeInteger(metrics.rating?.social_score)
     ? metrics.rating?.social_score ?? null
     : null;
-  const metricsText = metrics.state === 'loading' ? 'Загружаем показатели…'
-    : metrics.state === 'missing-channel' ? 'Откройте канал Twitch, чтобы увидеть показатели.'
-      : metrics.state === 'unavailable' ? 'Показатели для этого канала пока недоступны.'
-        : metrics.state === 'error' ? 'Не удалось загрузить показатели.'
-          : metrics.state === 'ready' ? `Канал: ${metrics.channel}` : 'Войдите, чтобы увидеть показатели.';
+  // Before the first round-trip the account is unknown, so no lock is shown yet.
+  const metricsState: RatingViewState = state.hydrated ? metrics.state : 'loading';
+  const metricsLock: MetricsLock | null = !state.hydrated ? null
+    : !state.settings.socialRatingEnabled ? 'disabled'
+      : !connected ? 'signed-out' : null;
+  const metricsText = metricsLock === 'disabled' ? 'Выключен в настройках'
+    : metricsLock === 'signed-out' ? 'Подключите Twitch, чтобы видеть рейтинг'
+      : metricsState === 'loading' ? 'Загружаем рейтинг…'
+        : metricsState === 'missing-channel' ? 'Откройте канал Twitch, чтобы увидеть рейтинг.'
+          : metricsState === 'unavailable' ? 'Рейтинг для этого канала пока недоступен.'
+            : metricsState === 'error' ? 'Не удалось загрузить рейтинг.'
+              : metricsState === 'ready' ? `Канал: ${metrics.channel}` : 'Подключите Twitch, чтобы видеть рейтинг';
 
   return {
     statusText,
@@ -123,9 +134,10 @@ export function derivePopupView(state: PopupState): PopupView {
     socialRatingEnabled: state.settings.socialRatingEnabled,
     customNicknamesEnabled: state.settings.customNicknamesEnabled,
     banner: state.banner,
-    metricsState: metrics.state,
+    metricsState,
+    metricsLock,
     metricsText,
-    metricsChannel: metrics.channel ?? '',
+    metricsChannel: metricsLock ? '' : metrics.channel ?? '',
     swagScore,
     socialScore,
   };

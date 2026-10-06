@@ -28,6 +28,26 @@ test('describes metric loading, unavailable channel, errors and verified scores 
   const ready = derivePopupView({ ...base, metrics: { state: 'ready', channel: 'alpha', rating: { swag_score: 1234, social_score: -8 } } });
   assert.equal(ready.swagScore, 1234);
   assert.equal(ready.socialScore, -8);
+  assert.equal(ready.metricsLock, null);
+});
+
+test('locks the metrics panel when the rating is off or nobody is signed in', () => {
+  const ready = { state: 'ready', channel: 'alpha', rating: { swag_score: 5, social_score: 1 } };
+
+  const disabled = derivePopupView({ ...base, settings: { ...base.settings, socialRatingEnabled: false }, metrics: ready });
+  assert.equal(disabled.metricsLock, 'disabled');
+  assert.equal(disabled.metricsChannel, '');
+
+  const signedOut = derivePopupView({ ...base, account: null, metrics: { state: 'idle', channel: null, rating: null } });
+  assert.equal(signedOut.metricsLock, 'signed-out');
+  assert.match(signedOut.metricsText, /Подключите Twitch/);
+
+  const offAndSignedOut = derivePopupView({ ...base, account: null, settings: { ...base.settings, socialRatingEnabled: false } });
+  assert.equal(offAndSignedOut.metricsLock, 'disabled');
+
+  const booting = derivePopupView({ ...base, hydrated: false, account: null });
+  assert.equal(booting.metricsLock, null);
+  assert.equal(booting.metricsState, 'loading');
 });
 
 test('rejects metrics responses from an older request or a prior account', () => {

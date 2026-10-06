@@ -75,11 +75,19 @@
       </section>
 
       <section id="metricsPanel" class="panel metrics reveal" aria-labelledby="metricsTitle">
+        <span class="metrics-icon" aria-hidden="true">
+          <svg class="metrics-icon__off" viewBox="0 0 20 20" focusable="false">
+            <path d="M10 2.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Zm-4.6 4.2a5.7 5.7 0 0 0 7.9 7.9L5.4 6.7Zm9.2 6.6A5.7 5.7 0 0 0 6.7 5.4l7.9 7.9Z" />
+          </svg>
+          <svg class="metrics-icon__lock" viewBox="0 0 20 20" focusable="false">
+            <path d="M10 2.5a4 4 0 0 1 4 4v2h.5A1.5 1.5 0 0 1 16 10v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 16v-6a1.5 1.5 0 0 1 1.5-1.5H6v-2a4 4 0 0 1 4-4Zm0 1.8a2.2 2.2 0 0 0-2.2 2.2v2h4.4v-2A2.2 2.2 0 0 0 10 4.3Zm0 7.2a1.2 1.2 0 0 0-.6 2.2V15a.6.6 0 1 0 1.2 0v-1.3a1.2 1.2 0 0 0-.6-2.2Z" />
+          </svg>
+        </span>
         <div class="panel-head">
-          <h2 id="metricsTitle">Мои показатели</h2>
+          <h2 id="metricsTitle">Соц. рейтинг</h2>
           <span id="metricsChannel" class="metrics-channel" aria-hidden="true"></span>
         </div>
-        <p id="metricsState" class="metrics-state" role="status" aria-live="polite">Войдите, чтобы увидеть показатели.</p>
+        <p id="metricsState" class="metrics-state" role="status" aria-live="polite">Загружаем рейтинг…</p>
         <dl id="metricsValues" class="metrics-values" hidden>
           <div>
             <dt>Свагометр</dt>

@@ -65,7 +65,7 @@ test('disabled rating response stays unavailable instead of rendering server zer
   await settle();
   await settle();
   assert.ok(sent.some((message) => message.type === 'GET_USER_RATING'));
-  assert.match(document.getElementById('metricsState').textContent, /недоступны/);
+  assert.match(document.getElementById('metricsState').textContent, /недоступен/);
   assert.equal(document.getElementById('metricsValues').hidden, true);
   assert.equal(document.getElementById('swagScore').textContent, '—');
   assert.equal(document.getElementById('socialScore').textContent, '—');
@@ -107,5 +107,27 @@ test('logout cannot repaint the prior account when the initial popup load resolv
   freshSettings.resolve({ ok: true, settings: { socialRatingEnabled: true, customNicknamesEnabled: true } });
   freshFeedback.resolve({ ok: true, feedback: null });
   await settle();
-  assert.match(document.getElementById('metricsState').textContent, /Войдите/);
+  assert.match(document.getElementById('metricsState').textContent, /Подключите Twitch/);
+  assert.equal(document.getElementById('metricsPanel').dataset.lock, 'signed-out');
+});
+
+test('a disabled social rating collapses the panel even with a loaded score', async (t) => {
+  const account = { twitchLogin: 'viewer', avatarUrl: null, telegramLinked: true, lastCheckedAt: 0 };
+  const dom = bootPopup((message) => {
+    if (message.type === 'viewer:getAccount') return Promise.resolve({ ok: true, account });
+    if (message.type === 'settings:get') return Promise.resolve({ ok: true, settings: { socialRatingEnabled: false, customNicknamesEnabled: true } });
+    if (message.type === 'viewer:getAuthFeedback') return Promise.resolve({ ok: true, feedback: null });
+    if (message.type === 'GET_USER_RATING') return Promise.resolve({ enabled: true, swag_score: 12, social_score: 3 });
+    return Promise.resolve({ ok: true });
+  });
+  t.after(() => dom.window.close());
+
+  await settle();
+  await settle();
+  const panel = document.getElementById('metricsPanel');
+  assert.ok(panel.classList.contains('metrics--locked'));
+  assert.equal(panel.dataset.lock, 'disabled');
+  assert.equal(document.getElementById('metricsValues').hidden, true);
+  assert.equal(document.getElementById('metricsChannel').textContent, '');
+  assert.match(document.getElementById('metricsState').textContent, /Выключен/);
 });

@@ -203,8 +203,12 @@ function render(): void {
   setText('metricsChannel', view.metricsChannel ? `· ${view.metricsChannel}` : '');
   setText('swagScore', formatMetric(view.swagScore));
   setText('socialScore', formatMetric(view.socialScore));
-  setHidden('metricsValues', view.metricsState !== 'ready');
-  $('metricsPanel')?.classList.toggle('metrics--loading', view.metricsState === 'loading');
+  setHidden('metricsValues', view.metricsLock !== null || view.metricsState !== 'ready');
+  const metricsPanel = $('metricsPanel');
+  metricsPanel?.classList.toggle('metrics--loading', !view.metricsLock && view.metricsState === 'loading');
+  metricsPanel?.classList.toggle('metrics--locked', view.metricsLock !== null);
+  if (view.metricsLock) metricsPanel?.setAttribute('data-lock', view.metricsLock);
+  else metricsPanel?.removeAttribute('data-lock');
 }
 
 async function getActiveChannelLogin(): Promise<string | null> {
