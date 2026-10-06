@@ -176,7 +176,8 @@ export function updateDynamicStyles(
   for (const [username, config] of Object.entries(cachedUsers)) {
     const safeName = username.replace(/(["\\])/g, '\\$1');
     const nativeSel = `.chat-line__message:not(:has(.seventv-chat-user)) [data-tcb-user="${safeName}"].chat-author__display-name:not([data-tcb-paint])`;
-    const stvNameSel = `[data-tcb-user="${safeName}"] .seventv-chat-user-username:not([style*="background"])`;
+    // An inline background means a 7TV paint, unless applyViewerNameStyle put our own gradient there.
+    const stvNameSel = `[data-tcb-user="${safeName}"] .seventv-chat-user-username:is([data-tcb-name-style], :not([style*="background"]))`;
     const nameCss = config.name_css || buildNameCssCompat(config);
     if (!nameCss) continue;
 

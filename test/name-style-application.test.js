@@ -72,3 +72,37 @@ test('7TV applies no-badge effects and clears them through its renderer after a 
   assert.equal(name.style.getPropertyValue('background'), '');
   assert.equal(name.style.getPropertyValue('filter'), '');
 });
+
+test('7TV name keeps its font rule after our inline gradient lands on it', () => {
+  const { updateDynamicStyles } = require('../dist-types/features/tribute-badges/dom.js');
+  const message = document.querySelector('.seventv-user-message');
+  const name = document.querySelector('.seventv-chat-user-username');
+  const fontStyle = { name_css: `${style.name_css} font-family: 'Almendra', sans-serif;` };
+
+  cachedStyle = fontStyle;
+  clearBadgeRenderState(message);
+  processSevenTVMessage(message, context);
+  assert.match(name.getAttribute('style'), /background/);
+
+  updateDynamicStyles({ alice: fontStyle }, {}, '');
+  const rules = document.getElementById('tcb-dynamic-styles').textContent.split('\n')
+    .filter((line) => line.includes('"alice"') && line.includes('font-family'));
+  const selectors = rules.map((line) => line.slice(0, line.indexOf(' {')).trim());
+  assert.ok(selectors.some((selector) => name.matches(selector)), `no font rule matches: ${selectors.join(' | ')}`);
+});
+
+test('7TV paint written by 7TV itself still keeps our rule off the name', () => {
+  const { updateDynamicStyles } = require('../dist-types/features/tribute-badges/dom.js');
+  const painted = document.createElement('div');
+  painted.innerHTML = '<div class="seventv-chat-user" data-tcb-user="bob"><span class="seventv-chat-user-username" style="background-image: url(paint.png)">bob</span></div>';
+  document.body.append(painted);
+
+  updateDynamicStyles({ bob: { name_css: "font-family: 'Almendra', sans-serif;" } }, {}, '');
+  const selectors = document.getElementById('tcb-dynamic-styles').textContent.split('\n')
+    .filter((line) => line.includes('"bob"'))
+    .map((line) => line.slice(0, line.indexOf(' {')).trim());
+  const name = painted.querySelector('.seventv-chat-user-username');
+  assert.ok(selectors.length > 0);
+  assert.equal(selectors.some((selector) => name.matches(selector)), false);
+  painted.remove();
+});
