@@ -10,16 +10,25 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Test and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.package.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -78,35 +87,52 @@ jobs:
           console.log('manifests and channels verified');
           NODE
 
+      # Архивы собираются здесь, а release только публикует проверенные файлы:
+      # так в джобу с правом записи не попадают npm и сторонний код сборки.
+      - name: Package release archives
+        id: package
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          CHROME="artifacts/svagaplus-extension-chrome-v${VERSION}.zip"
+          FIREFOX="artifacts/svagaplus-extension-firefox-v${VERSION}.zip"
+          (cd dist/firefox-prod && zip -rq "../../${FIREFOX}" .)
+          for archive in "$CHROME" "$FIREFOX"; do
+            test -s "$archive"
+            unzip -tq "$archive"
+            unzip -Z1 "$archive" | grep -Fxq manifest.json
+          done
+          (cd artifacts && sha256sum -- *.zip > SHA256SUMS)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload archives
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extension-archives
+          path: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Release browser archives
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
-    concurrency:
-      group: release-main
-      cancel-in-progress: false
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v${{ needs.test.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-
       - name: Check release version
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
+        id: release
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v${VERSION}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Release ${TAG} already exists; nothing to publish."
@@ -114,43 +140,23 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install dependencies
-        if: steps.version.outputs.exists == 'false'
-        run: npm ci
+      - name: Download archives
+        if: steps.release.outputs.exists == 'false'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: extension-archives
+          path: artifacts
 
-      - name: Build production archives
-        if: steps.version.outputs.exists == 'false'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          npm run build:prod
-          npm run build:prod:firefox
-          (cd dist/firefox-prod && zip -rq "../../artifacts/svagaplus-extension-firefox-v${VERSION}.zip" .)
-
-      - name: Verify release archives
-        if: steps.version.outputs.exists == 'false'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          CHROME="artifacts/svagaplus-extension-chrome-v${VERSION}.zip"
-          FIREFOX="artifacts/svagaplus-extension-firefox-v${VERSION}.zip"
-          test -s "$CHROME"
-          test -s "$FIREFOX"
-          unzip -t "$CHROME"
-          unzip -t "$FIREFOX"
-          unzip -Z1 "$CHROME" | grep -Fx manifest.json
-          unzip -Z1 "$FIREFOX" | grep -Fx manifest.json
+      - name: Attest build provenance
+        if: steps.release.outputs.exists == 'false'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/*.zip
 
       - name: Create GitHub Release
-        if: steps.version.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+        if: steps.release.outputs.exists == 'false'
         run: |
-          gh release create "$TAG" \
-            "artifacts/svagaplus-extension-chrome-v${VERSION}.zip" \
-            "artifacts/svagaplus-extension-firefox-v${VERSION}.zip" \
+          gh release create "$TAG" artifacts/*.zip artifacts/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes
