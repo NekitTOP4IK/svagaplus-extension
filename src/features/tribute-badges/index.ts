@@ -1,5 +1,6 @@
 import { BACKEND_URL } from '../../shared/config';
 import browser from '../../shared/browser';
+import { getSharedSocket, type SharedSocket } from '../../shared/socket';
 import { fetchBadgeCard, fetchChannelBadges, normalizeViewerBadges } from './api';
 import { initBadgeCards } from './badge-card';
 import { normalizeLogin, updateDynamicStyles } from './dom';
@@ -23,12 +24,6 @@ const CHAT_SCOPED_NAME_SELECTOR = TRIBUTE_NAME_SELECTORS
   .split(',')
   .map((sel) => `.chat-line__message ${sel.trim()}`)
   .join(', ');
-
-declare const io: undefined | ((url: string, options: Record<string, unknown>) => {
-  emit(event: string, ...args: unknown[]): void;
-  on(event: string, handler: (payload?: any) => void): void;
-  disconnect(): void;
-});
 
 interface CacheEntry {
   expiresAt: number;
@@ -57,8 +52,13 @@ const badgeGrantListeners = new Set<(payload: { channel: string }) => void>();
 const STARTUP_SCAN_DELAYS_MS = [0, 100, 300, 700, 1500, 3000];
 
 let currentChannelName: string | null = null;
-let socket: ReturnType<NonNullable<typeof io>> | null = null;
-let socketGeneration = 0;
+let realtimeSocket: SharedSocket | null = null;
+let channelMode: SnapshotMode | null = null;
+let channelSession = 0;
+let joinGeneration = 0;
+let joinedCurrentChannel = false;
+let awaitingJoinAck = true;
+let joinAckTimer: number | null = null;
 let styleRafPending = false;
 let initialFetchSucceeded = false;
 let channelRefreshTimer: number | null = null;
@@ -572,9 +572,7 @@ function resetChannelState(clearCache = true): void {
   badgeGrantsRefreshTimer = null;
   stopStartupScan();
   initialFetchSucceeded = false;
-  socketGeneration += 1;
-  if (socket) socket.disconnect();
-  socket = null;
+  leaveRealtimeChannel();
   if (clearCache && currentChannelName) invalidateViewerBadgeCache(currentChannelName);
   hiddenMessageQueue.clear();
   softReprocessGeneration += 1;
@@ -607,56 +605,80 @@ function forwardSnapshotEvent(channelName: string, msg: { type?: unknown; rev?: 
   browser.runtime.sendMessage({ type: 'SNAPSHOT_EVENT', channelLogin: channelName, event }).catch(() => {});
 }
 
-function initSocket(channelName: string): void {
-  if (socket) socket.disconnect();
-  socket = null;
-  if (typeof io === 'undefined') return;
-  const generation = ++socketGeneration;
-  void openChannelSnapshot(channelName).then((mode) => {
-    if (generation !== socketGeneration) return;
-    if (mode === 'unknown') {
-      console.info(LOG_PREFIX, 'channel unknown to backend, socket skipped', { channelName });
-      return;
-    }
-    connectSocket(channelName);
+function isCurrentJoin(generation: number, channelName: string): boolean {
+  return generation === joinGeneration && channelName === currentChannelName;
+}
+
+function ackMatchesChannel(ack: unknown, channelName: string): boolean {
+  if (!ack || typeof ack !== 'object') return true;
+  const { channel } = ack as { channel?: unknown };
+  return typeof channel !== 'string' || normalizeLogin(channel) === channelName;
+}
+
+function joinChannel(socket: SharedSocket, channelName: string): void {
+  const reconnect = joinedCurrentChannel;
+  const shouldFetch = reconnect || !initialFetchSucceeded;
+  joinedCurrentChannel = true;
+  awaitingJoinAck = true;
+  const generation = ++joinGeneration;
+  if (joinAckTimer) clearTimeout(joinAckTimer);
+  // The fetch waits for the ack so a revision mismatch reaches the background
+  // before it answers from a snapshot that missed events while disconnected.
+  let settled = false;
+  const afterJoin = () => {
+    if (settled || !isCurrentJoin(generation, channelName)) return;
+    settled = true;
+    if (joinAckTimer) clearTimeout(joinAckTimer);
+    joinAckTimer = null;
+    awaitingJoinAck = false;
+    if (shouldFetch) void fetchBadges(channelName);
+  };
+  joinAckTimer = window.setTimeout(afterJoin, JOIN_ACK_TIMEOUT_MS);
+  socket.emit('join_channel', { channel_name: channelName }, (ack?: unknown) => {
+    if (!isCurrentJoin(generation, channelName) || !ackMatchesChannel(ack, channelName)) return;
+    forwardJoinAck(channelName, ack, reconnect);
+    afterJoin();
   });
 }
 
-function connectSocket(channelName: string): void {
-  if (typeof io === 'undefined') return;
-  socket = io(BACKEND_URL, {
-    transports: ['websocket'],
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 15000,
-    randomizationFactor: 0.7,
+function leaveRealtimeChannel(): void {
+  if (joinedCurrentChannel && currentChannelName) {
+    realtimeSocket?.emit('leave_channel', { channel_name: currentChannelName });
+  }
+  channelSession += 1;
+  joinGeneration += 1;
+  if (joinAckTimer) clearTimeout(joinAckTimer);
+  joinAckTimer = null;
+  channelMode = null;
+  joinedCurrentChannel = false;
+  awaitingJoinAck = true;
+}
+
+function initSocket(channelName: string): void {
+  const socket = bindSharedSocket();
+  if (!socket) return;
+  const session = channelSession;
+  void openChannelSnapshot(channelName).then((mode) => {
+    if (session !== channelSession || channelName !== currentChannelName) return;
+    channelMode = mode;
+    if (mode === 'unknown') {
+      console.info(LOG_PREFIX, 'channel unknown to backend, join skipped', { channelName });
+      return;
+    }
+    if (socket.state().connected) joinChannel(socket, channelName);
   });
+}
 
-  console.info(LOG_PREFIX, 'socket connecting', { channelName, backend: BACKEND_URL });
+function bindSharedSocket(): SharedSocket | null {
+  if (realtimeSocket) return realtimeSocket;
+  const socket = getSharedSocket();
+  if (!socket) return null;
+  realtimeSocket = socket;
 
-  let socketEverConnected = false;
-  socket.on('connect', () => {
-    console.info(LOG_PREFIX, 'socket connected', {
-      channelName,
-      socketId: (socket as { id?: string } | null)?.id || null,
-      transport: (socket as { io?: { engine?: { transport?: { name?: string } } } } | null)?.io?.engine?.transport?.name || null,
-    });
-    const reconnect = socketEverConnected;
-    const shouldFetch = reconnect || !initialFetchSucceeded;
-    socketEverConnected = true;
-    // The fetch waits for the ack so a revision mismatch reaches the background
-    // before it answers from a snapshot that missed events while disconnected.
-    let joined = false;
-    const afterJoin = () => {
-      if (joined) return;
-      joined = true;
-      clearTimeout(ackTimer);
-      if (shouldFetch && normalizeLogin(channelName) === currentChannelName) void fetchBadges(channelName);
-    };
-    const ackTimer = window.setTimeout(afterJoin, JOIN_ACK_TIMEOUT_MS);
-    socket?.emit('join_channel', { channel_name: channelName }, (ack?: unknown) => {
-      forwardJoinAck(channelName, ack, reconnect);
-      afterJoin();
-    });
+  socket.onConnect(() => {
+    const channelName = currentChannelName;
+    console.info(LOG_PREFIX, 'socket connected', { channelName, mode: channelMode });
+    if (channelName && (channelMode === 'snapshot' || channelMode === 'legacy')) joinChannel(socket, channelName);
   });
 
   socket.on('hello', (msg) => {
@@ -667,151 +689,132 @@ function connectSocket(channelName: string): void {
     console.info(LOG_PREFIX, 'joined channel ack', msg);
   });
 
-  socket.on('connect_error', (error) => {
-    console.warn(LOG_PREFIX, 'socket connect_error', {
-      message: error?.message || String(error),
-      data: (error as { data?: unknown } | null)?.data,
-    });
-  });
+  socket.on('badge_update', handleBadgeUpdate);
+  socket.on('social_rating_update', handleSocialRatingUpdate);
+  socket.on('badge_grants_updated', handleBadgeGrantsUpdated);
+  return socket;
+}
 
-  socket.on('disconnect', (reason) => {
-    console.warn(LOG_PREFIX, 'socket disconnected', { reason });
-  });
-
-  socket.on('error', (error) => {
-    console.warn(LOG_PREFIX, 'socket error', error);
-  });
-
-  const manager = (socket as { io?: { on?: (event: string, handler: (...args: any[]) => void) => void } }).io;
-  manager?.on?.('reconnect_attempt', (attempt: number) => {
-    console.info(LOG_PREFIX, 'socket reconnect_attempt', { attempt });
-  });
-  manager?.on?.('reconnect', (attempt: number) => {
-    console.info(LOG_PREFIX, 'socket reconnected', { attempt });
-  });
-  manager?.on?.('reconnect_error', (error: unknown) => {
-    console.warn(LOG_PREFIX, 'socket reconnect_error', error);
-  });
-  manager?.on?.('reconnect_failed', () => {
-    console.warn(LOG_PREFIX, 'socket reconnect_failed');
-  });
-
-  socket.on('badge_update', (msg) => {
-    if (!msg) return;
-    if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
-    if (SNAPSHOT_FORWARDED_BADGE_UPDATES.has(msg.type)) forwardSnapshotEvent(channelName, msg);
-    if (msg.type === 'channel_refresh') {
-      console.info(LOG_PREFIX, 'channel refresh', { channelName });
-      channelStyles.clearChannel(channelName);
-      scheduleDynamicStyles();
-      invalidateViewerBadgeCache(channelName);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
-      if (channelRefreshTimer) return;
-      channelRefreshTimer = window.setTimeout(() => {
-        channelRefreshTimer = null;
-        void fetchBadges(channelName);
-      }, Math.random() * CHANNEL_REFRESH_JITTER_MS);
-      return;
-    }
-    if (msg.type === 'viewer_refresh') {
-      const login = normalizeLogin(msg.data?.viewer);
-      if (!login) return;
-      console.info(LOG_PREFIX, 'viewer refresh', { channelName, login });
-      channelStyles.clearViewerEverywhere(login);
-      scheduleDynamicStyles();
-      invalidateViewerBadgeEverywhere(login);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
-      refreshUserInChat(login);
-      return;
-    }
-    if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
-
-    const login = normalizeLogin(msg.data.twitch_username);
-    if (DEBUG) console.debug(LOG_PREFIX, 'user update', {
-      channelName,
-      login,
-      badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
-      tra: Array.isArray(msg.data.tra_badges) ? msg.data.tra_badges.length : 0,
-      collectible: Array.isArray(msg.data.collectible_badges) ? msg.data.collectible_badges.length : 0,
-      tsr: Array.isArray(msg.data.tsr_badges) ? msg.data.tsr_badges.length : 0,
-    });
-    const key = viewerBadgeKey(channelName, login);
-    incrementViewerBadgeGeneration(channelName, login);
-    getBatchState(channelName).pending.delete(login);
-    if (msg.data.font_presets) channelStyles.assignFontPresets(channelName, msg.data.font_presets);
-    cacheViewerStyle(channelName, login, msg.data);
-    if (Array.isArray(msg.data.badge_ids) && msg.data.badges && typeof msg.data.badges === 'object') {
-      const badges = normalizeViewerBadges({
-        badges: msg.data.badges,
-        viewers: {
-          [login]: msg.data,
-        },
-      }, login);
-      cacheViewerBadges(channelName, login, badges);
-      viewerBadgeInflight[key]?.resolve(badges);
-      delete viewerBadgeInflight[key];
-      cleanupViewerBadgeGeneration(key);
-      browser.runtime.sendMessage({
-        type: 'UPSERT_TRIBUTE_BADGE_CACHE',
-        channelLogin: channelName,
-        login,
-        viewer: msg.data,
-        badges: msg.data.badges,
-        font_presets: msg.data.font_presets,
-      }).catch(() => {});
-    } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
-      const badges = normalizeViewerBadges(msg.data);
-      cacheViewerBadges(channelName, login, badges);
-      viewerBadgeInflight[key]?.resolve(badges);
-      delete viewerBadgeInflight[key];
-      cleanupViewerBadgeGeneration(key);
-      browser.runtime.sendMessage({
-        type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
-        channelLogin: channelName,
-        login,
-      }).catch(() => {});
-    } else {
-      invalidateViewerBadgeCache(channelName, login);
-      browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
-    }
-    refreshUserInChat(login);
-  });
-
-  socket.on('social_rating_update', (msg) => {
-    if (DEBUG) console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
-    if (!msg || typeof msg.channel !== 'string' || typeof msg.login !== 'string') return;
-    const score = typeof msg.swag_score === 'number' ? msg.swag_score : msg.score;
-    if (typeof score !== 'number' || !Number.isFinite(score)) return;
-    for (const listener of socialRatingListeners) listener({
-      channel: normalizeLogin(msg.channel),
-      login: normalizeLogin(msg.login),
-      score,
-      swag_score: typeof msg.swag_score === 'number' ? msg.swag_score : score,
-      social_score: typeof msg.social_score === 'number' ? msg.social_score : 0,
-    });
-  });
-
-  socket.on('badge_grants_updated', (msg) => {
-    if (DEBUG) console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
-    if (!msg || typeof msg.channel !== 'string') return;
-    const channel = normalizeLogin(msg.channel);
-    if (channel !== normalizeLogin(channelName)) return;
-    forwardSnapshotEvent(channelName, { type: 'badge_grants_updated', rev: msg.rev });
-    // Сброс сразу, а не после разброса: события из соседних вкладок того же
-    // канала совпадают по времени, и поздняя инвалидация из другой вкладки
-    // иначе обесценивала бы уже летящий запрос.
+function handleBadgeUpdate(msg: any): void {
+  const channelName = currentChannelName;
+  // badge_update carries no channel, so until the current join is acked it may
+  // still come from the room just left; socket.io delivers those before the ack.
+  if (!msg || !channelName || awaitingJoinAck) return;
+  if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
+  if (SNAPSHOT_FORWARDED_BADGE_UPDATES.has(msg.type)) forwardSnapshotEvent(channelName, msg);
+  if (msg.type === 'channel_refresh') {
+    console.info(LOG_PREFIX, 'channel refresh', { channelName });
+    channelStyles.clearChannel(channelName);
+    scheduleDynamicStyles();
     invalidateViewerBadgeCache(channelName);
     browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
-    if (badgeGrantsRefreshTimer) return;
-    badgeGrantsRefreshTimer = window.setTimeout(async () => {
-      badgeGrantsRefreshTimer = null;
-      if (normalizeLogin(channelName) !== currentChannelName) return;
-      const logins = collectVisibleLogins();
-      await fetchBadges(channelName, logins);
-      for (const login of logins) refreshUserInChat(login);
-      for (const listener of badgeGrantListeners) listener({ channel });
+    if (channelRefreshTimer) return;
+    channelRefreshTimer = window.setTimeout(() => {
+      channelRefreshTimer = null;
+      void fetchBadges(channelName);
     }, Math.random() * CHANNEL_REFRESH_JITTER_MS);
+    return;
+  }
+  if (msg.type === 'viewer_refresh') {
+    const login = normalizeLogin(msg.data?.viewer);
+    if (!login) return;
+    console.info(LOG_PREFIX, 'viewer refresh', { channelName, login });
+    channelStyles.clearViewerEverywhere(login);
+    scheduleDynamicStyles();
+    invalidateViewerBadgeEverywhere(login);
+    browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', login }).catch(() => {});
+    refreshUserInChat(login);
+    return;
+  }
+  if (msg.type !== 'user_update' || !msg.data?.twitch_username) return;
+
+  const login = normalizeLogin(msg.data.twitch_username);
+  if (DEBUG) console.debug(LOG_PREFIX, 'user update', {
+    channelName,
+    login,
+    badgeIds: Array.isArray(msg.data.badge_ids) ? msg.data.badge_ids.length : 0,
+    tra: Array.isArray(msg.data.tra_badges) ? msg.data.tra_badges.length : 0,
+    collectible: Array.isArray(msg.data.collectible_badges) ? msg.data.collectible_badges.length : 0,
+    tsr: Array.isArray(msg.data.tsr_badges) ? msg.data.tsr_badges.length : 0,
   });
+  const key = viewerBadgeKey(channelName, login);
+  incrementViewerBadgeGeneration(channelName, login);
+  getBatchState(channelName).pending.delete(login);
+  if (msg.data.font_presets) channelStyles.assignFontPresets(channelName, msg.data.font_presets);
+  cacheViewerStyle(channelName, login, msg.data);
+  if (Array.isArray(msg.data.badge_ids) && msg.data.badges && typeof msg.data.badges === 'object') {
+    const badges = normalizeViewerBadges({
+      badges: msg.data.badges,
+      viewers: {
+        [login]: msg.data,
+      },
+    }, login);
+    cacheViewerBadges(channelName, login, badges);
+    viewerBadgeInflight[key]?.resolve(badges);
+    delete viewerBadgeInflight[key];
+    cleanupViewerBadgeGeneration(key);
+    browser.runtime.sendMessage({
+      type: 'UPSERT_TRIBUTE_BADGE_CACHE',
+      channelLogin: channelName,
+      login,
+      viewer: msg.data,
+      badges: msg.data.badges,
+      font_presets: msg.data.font_presets,
+    }).catch(() => {});
+  } else if (Array.isArray(msg.data.tra_badges) || Array.isArray(msg.data.tsr_badges)) {
+    const badges = normalizeViewerBadges(msg.data);
+    cacheViewerBadges(channelName, login, badges);
+    viewerBadgeInflight[key]?.resolve(badges);
+    delete viewerBadgeInflight[key];
+    cleanupViewerBadgeGeneration(key);
+    browser.runtime.sendMessage({
+      type: 'INVALIDATE_TRIBUTE_BADGE_CACHE',
+      channelLogin: channelName,
+      login,
+    }).catch(() => {});
+  } else {
+    invalidateViewerBadgeCache(channelName, login);
+    browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName, login }).catch(() => {});
+  }
+  refreshUserInChat(login);
+}
+
+function handleSocialRatingUpdate(msg: any): void {
+  if (DEBUG) console.debug(LOG_PREFIX, 'social_rating_update raw', msg);
+  if (!currentChannelName) return;
+  if (!msg || typeof msg.channel !== 'string' || typeof msg.login !== 'string') return;
+  const score = typeof msg.swag_score === 'number' ? msg.swag_score : msg.score;
+  if (typeof score !== 'number' || !Number.isFinite(score)) return;
+  for (const listener of socialRatingListeners) listener({
+    channel: normalizeLogin(msg.channel),
+    login: normalizeLogin(msg.login),
+    score,
+    swag_score: typeof msg.swag_score === 'number' ? msg.swag_score : score,
+    social_score: typeof msg.social_score === 'number' ? msg.social_score : 0,
+  });
+}
+
+function handleBadgeGrantsUpdated(msg: any): void {
+  if (DEBUG) console.debug(LOG_PREFIX, 'badge_grants_updated raw', msg);
+  const channelName = currentChannelName;
+  if (!msg || typeof msg.channel !== 'string' || !channelName || !joinedCurrentChannel) return;
+  const channel = normalizeLogin(msg.channel);
+  if (channel !== normalizeLogin(channelName)) return;
+  forwardSnapshotEvent(channelName, { type: 'badge_grants_updated', rev: msg.rev });
+  // Сброс сразу, а не после разброса: события из соседних вкладок того же
+  // канала совпадают по времени, и поздняя инвалидация из другой вкладки
+  // иначе обесценивала бы уже летящий запрос.
+  invalidateViewerBadgeCache(channelName);
+  browser.runtime.sendMessage({ type: 'INVALIDATE_TRIBUTE_BADGE_CACHE', channelLogin: channelName }).catch(() => {});
+  if (badgeGrantsRefreshTimer) return;
+  badgeGrantsRefreshTimer = window.setTimeout(async () => {
+    badgeGrantsRefreshTimer = null;
+    if (normalizeLogin(channelName) !== currentChannelName) return;
+    const logins = collectVisibleLogins();
+    await fetchBadges(channelName, logins);
+    for (const login of logins) refreshUserInChat(login);
+    for (const listener of badgeGrantListeners) listener({ channel });
+  }, Math.random() * CHANNEL_REFRESH_JITTER_MS);
 }
 
 function extractChannelName(): string | null {
@@ -1084,6 +1087,7 @@ function hookNavigation(): void {
 
 export function startTributeBadgesContent(): void {
   initBadgeCards(fetchBadgeCard);
+  bindSharedSocket();
   currentChannelName = extractChannelName();
   if (currentChannelName) {
     startStartupScan(currentChannelName);

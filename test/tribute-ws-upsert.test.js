@@ -34,23 +34,7 @@ function wait(ms) {
 const messages = [];
 require('./helpers/build-globals').defineBuildGlobals();
 
-/** @type {{ handlers: Record<string, Function>, lastSocket: object | null }} */
-const ioState = { handlers: {}, lastSocket: null };
-
-global.io = function mockIo() {
-  const handlers = {};
-  const socket = {
-    on(ev, fn) {
-      handlers[ev] = fn;
-    },
-    emit() {},
-    disconnect() {},
-    __handlers: handlers,
-  };
-  ioState.handlers = handlers;
-  ioState.lastSocket = socket;
-  return socket;
-};
+const io = require('./helpers/fake-io').installFakeIo();
 
 const polyfillPath = require.resolve('webextension-polyfill');
 require.cache[polyfillPath] = {
@@ -81,15 +65,15 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
 
 (async () => {
   startTributeBadgesContent();
+  const socket = io.socket();
+  socket.fire('connect');
   await wait(50);
-
-  const handlers = ioState.handlers;
-  assert.ok(typeof handlers.badge_update === 'function', 'expected badge_update socket handler');
+  socket.ackJoin('olesha');
 
   messages.length = 0;
 
   // 1) usable badge_ids + badges payload → UPSERT, not INVALIDATE
-  handlers.badge_update({
+  socket.fire('badge_update', {
     type: 'user_update',
     data: {
       twitch_username: 'alice',
@@ -119,7 +103,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   messages.length = 0;
 
   // 2) legacy tra/tsr-only payload → INVALIDATE BG (content still caches normalized badges)
-  handlers.badge_update({
+  socket.fire('badge_update', {
     type: 'user_update',
     data: {
       twitch_username: 'bob',
@@ -141,7 +125,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   messages.length = 0;
 
   // 3) unusable payload → still INVALIDATE
-  handlers.badge_update({
+  socket.fire('badge_update', {
     type: 'user_update',
     data: {
       twitch_username: 'carol',
@@ -161,7 +145,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   messages.length = 0;
 
   // 4) channel_refresh → channel-wide INVALIDATE (no UPSERT)
-  handlers.badge_update({ type: 'channel_refresh' });
+  socket.fire('badge_update', { type: 'channel_refresh' });
   await wait(50);
 
   assert.ok(
@@ -174,7 +158,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   );
 
   messages.length = 0;
-  handlers.badge_update({ type: 'viewer_refresh', data: { viewer: 'alice' } });
+  socket.fire('badge_update', { type: 'viewer_refresh', data: { viewer: 'alice' } });
   await wait(50);
   assert.ok(
     messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.login === 'alice' && !m.channelLogin),

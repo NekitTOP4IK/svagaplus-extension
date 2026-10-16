@@ -31,12 +31,7 @@ test('viewer_refresh invalidates globally and refreshes mounted Twitch and 7TV m
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
 
   const messages = [];
-  const handlers = {};
-  global.io = () => ({
-    on(event, handler) { handlers[event] = handler; },
-    emit() {},
-    disconnect() {},
-  });
+  const io = require('./helpers/fake-io').installFakeIo();
   require('./helpers/build-globals').defineBuildGlobals();
   const polyfillPath = require.resolve('webextension-polyfill');
   require.cache[polyfillPath] = {
@@ -63,11 +58,14 @@ test('viewer_refresh invalidates globally and refreshes mounted Twitch and 7TV m
 
   const { startTributeBadgesContent } = require('../dist-types/features/tribute-badges/index.js');
   startTributeBadgesContent();
+  const socket = io.socket();
+  socket.fire('connect');
   await wait(250);
+  socket.ackJoin('channel');
   assert.equal(document.querySelectorAll('.tcb-badge-img').length, 2);
 
   messages.length = 0;
-  handlers.badge_update({ type: 'viewer_refresh', data: { viewer: 'alice', reason: 'collectible_badge_changed' } });
+  socket.fire('badge_update', { type: 'viewer_refresh', data: { viewer: 'alice', reason: 'collectible_badge_changed' } });
   await wait(250);
 
   assert.equal(document.querySelectorAll('.tcb-badge-list .tcb-badge-img').length, 1);

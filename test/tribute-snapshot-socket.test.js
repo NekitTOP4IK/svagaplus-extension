@@ -17,19 +17,7 @@ require('./helpers/build-globals').defineBuildGlobals();
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const sockets = [];
-global.io = function mockIo() {
-  const handlers = {};
-  const socket = {
-    emits: [],
-    on(event, fn) { handlers[event] = fn; },
-    emit(...args) { socket.emits.push(args); },
-    disconnect() {},
-    handlers,
-  };
-  sockets.push(socket);
-  return socket;
-};
+const io = require('./helpers/fake-io').installFakeIo();
 
 const messages = [];
 const modes = { ghostchan: 'unknown', olesha: 'snapshot' };
@@ -58,17 +46,18 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
 
 (async () => {
   startTributeBadgesContent();
+  assert.equal(io.sockets.length, 1, 'the shared socket exists on every Twitch page');
+  const socket = io.socket();
+  socket.fire('connect');
   await wait(30);
   assert.deepEqual(messages.filter((m) => m.type === 'SNAPSHOT_OPEN'), [{ type: 'SNAPSHOT_OPEN', channelLogin: 'ghostchan' }]);
-  assert.equal(sockets.length, 0, 'an unknown channel must not open a socket');
+  assert.equal(socket.joins().length, 0, 'an unknown channel must not be joined');
 
   history.pushState({}, '', '/olesha');
   await wait(30);
-  assert.equal(sockets.length, 1, 'a known channel opens the socket');
-  const socket = sockets[0];
+  assert.equal(io.sockets.length, 1, 'a known channel reuses the shared socket');
 
-  socket.handlers.connect();
-  const join = socket.emits.find(([event]) => event === 'join_channel');
+  const join = socket.lastJoin('olesha');
   assert.deepEqual(join[1], { channel_name: 'olesha' });
   assert.equal(typeof join[2], 'function', 'join_channel must pass an ack callback');
 
@@ -85,7 +74,7 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   assert.equal(messages.filter((m) => m.type === 'SNAPSHOT_SYNC').length, 0, 'an empty ack from an old backend is ignored');
 
   messages.length = 0;
-  socket.handlers.badge_update({
+  socket.fire('badge_update', {
     type: 'user_update',
     rev: 8,
     data: { twitch_username: 'Alice', badge_ids: ['b1'], badges: { b1: { image_url: '/b1.png' } } },
@@ -104,10 +93,10 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   });
 
   messages.length = 0;
-  socket.handlers.badge_update({ type: 'viewer_refresh', global_rev: 3, data: { viewer: 'bob' } });
-  socket.handlers.badge_update({ type: 'channel_refresh', rev: 9, data: {} });
-  socket.handlers.badge_grants_updated({ channel: 'olesha', rev: 10 });
-  socket.handlers.badge_grants_updated({ channel: 'otherchan', rev: 99 });
+  socket.fire('badge_update', { type: 'viewer_refresh', global_rev: 3, data: { viewer: 'bob' } });
+  socket.fire('badge_update', { type: 'channel_refresh', rev: 9, data: {} });
+  socket.fire('badge_grants_updated', { channel: 'olesha', rev: 10 });
+  socket.fire('badge_grants_updated', { channel: 'otherchan', rev: 99 });
   await wait(10);
   assert.deepEqual(messages.filter((m) => m.type === 'SNAPSHOT_EVENT').map((m) => m.event), [
     { type: 'viewer_refresh', global_rev: 3, data: { viewer: 'bob' } },
@@ -116,8 +105,9 @@ const { startTributeBadgesContent } = require('../dist-types/features/tribute-ba
   ]);
 
   messages.length = 0;
-  socket.handlers.connect();
-  const rejoin = socket.emits.filter(([event]) => event === 'join_channel')[1];
+  socket.fire('disconnect', 'transport close');
+  socket.fire('connect');
+  const rejoin = socket.joins()[1];
   rejoin[2]({ channel: 'olesha', known: true, rev: 12, global_rev: 3 });
   await wait(10);
   assert.equal(messages.find((m) => m.type === 'SNAPSHOT_SYNC').reconnect, true);

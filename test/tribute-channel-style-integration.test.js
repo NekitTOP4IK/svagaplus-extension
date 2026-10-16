@@ -32,18 +32,7 @@ Object.defineProperty(document, 'hidden', { configurable: true, get: () => false
 require('./helpers/build-globals').defineBuildGlobals();
 const chrome = require('./helpers/extension-env').stubExtensionApis();
 
-const sockets = [];
-global.io = () => {
-  const handlers = {};
-  const socket = {
-    on(event, handler) { handlers[event] = handler; },
-    emit() {},
-    disconnect() {},
-    handlers,
-  };
-  sockets.push(socket);
-  return socket;
-};
+const io = require('./helpers/fake-io').installFakeIo();
 
 const colors = { alpha: '#111111', beta: '#222222' };
 let fetches = 0;
@@ -64,6 +53,11 @@ chrome.runtime.sendMessage = async (message) => {
 
 const content = require('../dist-types/features/tribute-badges/index.js');
 
+async function ackCurrentJoin(channel) {
+  await wait();
+  io.socket().ackJoin(channel);
+}
+
 async function loadStyle(channel, login = 'alice') {
   const request = content.__resolveBadgesForLogin(channel, login);
   await bounded(content.__flushViewerBadgeBatchForTest(channel), `${channel}/${login} flush`);
@@ -81,6 +75,7 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   });
 
   content.startTributeBadgesContent();
+  io.socket().fire('connect');
 
   let css = await loadStyle('alpha');
   assert.match(css, /#111111/, 'alpha style must be rendered');
@@ -98,8 +93,9 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   assert.doesNotMatch(css, /#222222/, 'inactive beta style must not leak into alpha');
   assert.equal(fetches, fetchesBeforeReturn, 'restoring retained styles must not need another response');
 
-  const alphaSocket = sockets.at(-1);
-  alphaSocket.handlers.badge_update({
+  await ackCurrentJoin('alpha');
+  const alphaSocket = io.socket();
+  alphaSocket.fire('badge_update', {
     type: 'user_update',
     data: {
       twitch_username: 'alice',
@@ -120,7 +116,7 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   const mixedBob = content.__resolveBadgesForLogin('alpha', 'bob');
   const mixedFlush = content.__flushViewerBadgeBatchForTest('alpha');
   await wait(0);
-  alphaSocket.handlers.badge_update({
+  alphaSocket.fire('badge_update', {
     type: 'user_update',
     data: {
       twitch_username: 'alice',
@@ -149,7 +145,7 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   assert.match(css, /Realtime Font/, 'realtime font preset must survive a mixed stale/current batch');
   assert.doesNotMatch(css, /Stale HTTP Font/, 'shared presets from a partially stale batch must be discarded');
 
-  alphaSocket.handlers.badge_update({ type: 'channel_refresh' });
+  alphaSocket.fire('badge_update', { type: 'channel_refresh' });
   await wait(0);
 
   let resolveOld;
@@ -162,7 +158,7 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   const oldRequest = content.__resolveBadgesForLogin('alpha', 'alice').catch(() => []);
   const oldFlush = content.__flushViewerBadgeBatchForTest('alpha');
   await wait(0);
-  alphaSocket.handlers.badge_update({ type: 'channel_refresh' });
+  alphaSocket.fire('badge_update', { type: 'channel_refresh' });
   const freshRequest = content.__resolveBadgesForLogin('alpha', 'alice');
   const freshFlush = content.__flushViewerBadgeBatchForTest('alpha');
   await wait(0);
@@ -192,12 +188,13 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
       badge_ids: [], name_color: colors[message.channelLogin],
     }])),
   });
-  alphaSocket.handlers.badge_update({ type: 'channel_refresh' });
+  alphaSocket.fire('badge_update', { type: 'channel_refresh' });
   await loadStyle('alpha');
   history.pushState({}, '', '/beta');
   await loadStyle('beta');
-  const betaSocket = sockets.at(-1);
-  betaSocket.handlers.badge_update({ type: 'viewer_refresh', data: { viewer: 'alice' } });
+  await ackCurrentJoin('beta');
+  const betaSocket = io.socket();
+  betaSocket.fire('badge_update', { type: 'viewer_refresh', data: { viewer: 'alice' } });
   await wait();
 
   history.pushState({}, '', '/alpha');
@@ -220,8 +217,9 @@ test('retains channel styles and rejects stale HTTP writes after realtime invali
   assert.ok(fetches > fetchesBeforeBetaRefetch, 'beta must refetch after the same global viewer refresh');
   assert.match(css, /#888888/, 'refetched beta style must be rendered');
 
-  const currentBetaSocket = sockets.at(-1);
-  currentBetaSocket.handlers.badge_update({
+  await ackCurrentJoin('beta');
+  const currentBetaSocket = io.socket();
+  currentBetaSocket.fire('badge_update', {
     type: 'user_update',
     data: { twitch_username: 'carol', name_color: '#999999' },
   });

@@ -11,7 +11,7 @@ const LOG_PREFIX = '[Svaga+ socket]';
 export interface IoSocket {
   on(event: string, handler: (...args: any[]) => void): unknown;
   off(event: string, handler: (...args: any[]) => void): unknown;
-  emit(event: string, data?: unknown): unknown;
+  emit(event: string, ...args: unknown[]): unknown;
   connect(): unknown;
 }
 
@@ -24,7 +24,7 @@ export interface ConnectionState {
 }
 
 export interface SharedSocket {
-  emit(event: string, data?: unknown): void;
+  emit(event: string, data?: unknown, ack?: (response?: unknown) => void): void;
   on(event: string, handler: (msg: any) => void): () => void;
   onConnect(handler: () => void): () => void;
   onState(listener: (s: ConnectionState) => void): () => void;
@@ -104,9 +104,11 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
   });
 
   return {
-    emit(event, data) {
+    emit(event, data, ack) {
       if (!state.connected) return;
-      socket.emit(event, data);
+      // socket.io would send a trailing undefined as an extra argument.
+      if (ack) socket.emit(event, data, ack);
+      else socket.emit(event, data);
     },
     on(event, handler) {
       socket.on(event, handler);

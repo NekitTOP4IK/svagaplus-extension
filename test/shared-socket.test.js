@@ -14,8 +14,8 @@ function setup({ random = 0.5 } = {}) {
     off(event, handler) {
       handlers.get(event)?.delete(handler);
     },
-    emit(event, data) {
-      calls.emit.push([event, data]);
+    emit(...args) {
+      calls.emit.push(args);
     },
     connect() {
       calls.connect += 1;
@@ -185,6 +185,22 @@ test('emit forwards to the socket while connected', () => {
   fire('connect');
   shared.emit('join_channel', { channel_name: 'x' });
   assert.deepStrictEqual(calls.emit, [['join_channel', { channel_name: 'x' }]]);
+});
+
+test('emit passes the ack callback through to the socket', () => {
+  const { shared, fire, calls } = setup();
+  fire('connect');
+  const ack = () => {};
+  shared.emit('join_channel', { channel_name: 'x' }, ack);
+  assert.deepStrictEqual(calls.emit, [['join_channel', { channel_name: 'x' }, ack]]);
+});
+
+test('an offline emit drops its ack callback', () => {
+  const { shared, calls } = setup();
+  let acked = 0;
+  shared.emit('join_channel', { channel_name: 'x' }, () => { acked += 1; });
+  assert.deepStrictEqual(calls.emit, []);
+  assert.strictEqual(acked, 0);
 });
 
 test('emit is a no-op while disconnected so the send buffer cannot replay it', () => {
