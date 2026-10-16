@@ -4,7 +4,7 @@ export type NoticeVariant = 'compact' | 'expanded';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
+export function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -20,7 +20,7 @@ function anchor(link: NoticeLink, className: string, onClick: () => void): HTMLA
   return node;
 }
 
-function closeButton(onDismiss: () => void): HTMLButtonElement {
+export function closeButton(onDismiss: () => void): HTMLButtonElement {
   const button = element('button', 'svp-notice__close');
   button.type = 'button';
   button.setAttribute('aria-label', 'Скрыть');
