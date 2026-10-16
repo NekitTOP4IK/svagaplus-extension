@@ -31,6 +31,7 @@ import {
 } from '../features/social-rating/background';
 import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
 import { startUpdateChecks } from '../features/update-notice/background';
+import { ChannelSnapshotStore, type SnapshotEvent } from '../features/tribute-badges/snapshot-store';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -125,6 +126,45 @@ async function restoreApiCooldown(): Promise<void> {
   };
   apiCooldown.setChangeListener(persist);
   persist(apiCooldown.snapshot());
+}
+
+const channelSnapshots = new ChannelSnapshotStore({
+  backendUrl: BACKEND_URL,
+  fetch: (url, init) => fetch(url, init),
+  cooldown: apiCooldown,
+  cooldownReady: apiCooldownRestored,
+});
+
+const SNAPSHOT_EVENT_TYPES = new Set<SnapshotEvent['type']>([
+  'user_update',
+  'channel_refresh',
+  'badge_grants_updated',
+  'viewer_refresh',
+]);
+
+function isRev(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isOptionalRev(value: unknown): value is number | undefined {
+  return value === undefined || isRev(value);
+}
+
+function parseSnapshotEvent(value: unknown): SnapshotEvent | null {
+  if (!isRecord(value) || !SNAPSHOT_EVENT_TYPES.has(value.type as SnapshotEvent['type'])) return null;
+  if (!isOptionalRev(value.rev) || !isOptionalRev(value.global_rev)) return null;
+  if (value.data !== undefined && !isRecord(value.data)) return null;
+  return {
+    type: value.type as SnapshotEvent['type'],
+    rev: value.rev,
+    global_rev: value.global_rev,
+    data: value.data as Record<string, unknown> | undefined,
+  };
+}
+
+async function answerChannelBadges(channelLogin: string, logins: string[], force: boolean): Promise<unknown> {
+  const fromSnapshot = await channelSnapshots.answer(channelLogin, uniqueSortedLogins(logins));
+  return fromSnapshot ?? fetchChannelBadges(channelLogin, logins, force);
 }
 
 function nextChannelBadgeSeq(): number {
@@ -959,7 +999,28 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
         logins.push(login);
       }
 
-      return fetchChannelBadges(channelLogin, logins, force);
+      return answerChannelBadges(channelLogin, logins, force);
+    }
+    case 'SNAPSHOT_OPEN': {
+      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
+      if (!channelLogin) return badRequest();
+      return channelSnapshots.open(channelLogin).then((mode) => ({ ok: true, mode }));
+    }
+    case 'SNAPSHOT_SYNC': {
+      const { channelLogin: rawChannel, rev, global_rev, reconnect } = message as {
+        channelLogin?: unknown; rev?: unknown; global_rev?: unknown; reconnect?: unknown;
+      };
+      const channelLogin = normalizeLogin(rawChannel);
+      if (!channelLogin || !isRev(rev) || !isRev(global_rev)) return badRequest();
+      channelSnapshots.sync(channelLogin, rev, global_rev, reconnect === true);
+      return Promise.resolve({ ok: true });
+    }
+    case 'SNAPSHOT_EVENT': {
+      const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
+      const event = parseSnapshotEvent((message as { event?: unknown }).event);
+      if (!channelLogin || !event) return badRequest();
+      channelSnapshots.event(channelLogin, event);
+      return Promise.resolve({ ok: true });
     }
     case 'INVALIDATE_TRIBUTE_BADGE_CACHE': {
       const channelLogin = normalizeLogin((message as { channelLogin?: unknown }).channelLogin);
