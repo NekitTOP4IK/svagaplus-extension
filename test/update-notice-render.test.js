@@ -12,7 +12,7 @@ const update = {
   tone: 'update',
   version: '1.4.0',
   fromVersion: '1.3.0',
-  text: 'Доступно обновление Свага+',
+  text: 'СВАГА+ — Доступно обновление',
   action: { label: 'Обновить', url: 'https://x.test/z.zip' },
   link: { label: 'Что нового ↗', url: 'https://svaga.test/changelog' },
 };
@@ -20,7 +20,7 @@ const success = {
   tone: 'success',
   version: '1.4.0',
   fromVersion: null,
-  text: 'Свага+ обновлена',
+  text: 'СВАГА+ — Обновление завершено',
   action: null,
   link: { label: 'Что нового ↗', url: 'https://svaga.test/changelog' },
 };
@@ -33,7 +33,7 @@ test('the compact plate carries version, text, the update button and a close but
   assert.ok(plate.classList.contains('svp-notice--update'));
   assert.ok(plate.classList.contains('svp-notice--compact'));
   assert.equal(plate.querySelector('.svp-notice__ver').textContent, 'v1.4.0');
-  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'Доступно обновление Свага+');
+  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'СВАГА+ — Доступно обновление');
   const button = plate.querySelector('a.svp-notice__btn');
   assert.equal(button.textContent, 'Обновить');
   assert.equal(button.href, 'https://x.test/z.zip');
@@ -51,7 +51,7 @@ test('the expanded plate shows the version jump and both links', () => {
   const plate = renderNotice(update, 'expanded', () => undefined);
 
   assert.equal(plate.querySelector('.svp-notice__ver').textContent, 'v1.3.0 → v1.4.0');
-  assert.equal(plate.querySelector('.svp-notice__title').textContent, 'Доступно обновление Свага+');
+  assert.equal(plate.querySelector('.svp-notice__title').textContent, 'СВАГА+ — Доступно обновление');
   assert.deepEqual([...plate.querySelectorAll('.svp-notice__actions a')].map((a) => a.textContent), ['Обновить', 'Что нового ↗']);
 });
 

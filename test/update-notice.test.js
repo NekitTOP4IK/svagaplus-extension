@@ -64,7 +64,7 @@ test('a newer release shows the red update notice', () => {
     tone: 'update',
     version: '1.4.0',
     fromVersion: '1.3.0',
-    text: 'Доступно обновление Свага+',
+    text: 'СВАГА+ — Доступно обновление',
     action: { label: 'Обновить', url: 'https://x.test/z.zip' },
     link: { label: 'Что нового ↗', url: 'https://svaga.test/changelog' },
   });
@@ -109,7 +109,7 @@ test('after an update the green notice shows once', () => {
   let current = state({ updatedTo: { version: '1.4.0', at: NOW } });
   const notice = deriveNotice(current, '1.4.0', NOW, SITE);
   assert.equal(notice.tone, 'success');
-  assert.equal(notice.text, 'Свага+ обновлена');
+  assert.equal(notice.text, 'СВАГА+ — Обновление завершено');
   assert.equal(notice.action, null);
   assert.deepEqual(notice.link, { label: 'Что нового ↗', url: 'https://svaga.test/changelog' });
 

@@ -93,10 +93,10 @@ export function deriveNotice(state: UpdateState, current: string, now: number, s
     return { tone: 'warning', version: current, fromVersion: null, text: 'Версия больше не поддерживается', action: update, link: null };
   }
   if (release?.version && compareVersions(release.version, current) > 0 && dismissed.update?.version !== release.version) {
-    return { tone: 'update', version: release.version, fromVersion: current, text: 'Доступно обновление Свага+', action: update, link: changelog };
+    return { tone: 'update', version: release.version, fromVersion: current, text: 'СВАГА+ — Доступно обновление', action: update, link: changelog };
   }
   if (updatedTo?.version === current && now - updatedTo.at < SUCCESS_TTL && dismissed.success?.version !== current) {
-    return { tone: 'success', version: current, fromVersion: null, text: 'Свага+ обновлена', action: null, link: changelog };
+    return { tone: 'success', version: current, fromVersion: null, text: 'СВАГА+ — Обновление завершено', action: null, link: changelog };
   }
   return null;
 }
