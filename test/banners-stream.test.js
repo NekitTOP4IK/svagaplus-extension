@@ -66,24 +66,19 @@ test('garbage leaves storage untouched', async () => {
   assert.equal(fake.setCalls, 0);
 });
 
-test('a stored snapshot drops dismissed ids that are gone from it', async () => {
+test('a snapshot write leaves the dismissed key alone, and a dismiss prunes it to the snapshot', async () => {
   reset();
   await applySnapshot(snap('r1', 1, 2, 3));
-  await setBannerDismissed([1, 2, 3]);
+  const dismissed = [1, 2, 3];
+  fake.store[BANNER_DISMISSED_KEY] = dismissed;
   fake.setCalls = 0;
   assert.equal(await applySnapshot(snap('r2', 2, 4)), true);
-  assert.deepEqual(fake.store[BANNER_DISMISSED_KEY], [2]);
-  assert.deepEqual(stored().banners.map((b) => b.id), [2, 4]);
-  assert.equal(fake.setCalls, 1);
-});
-
-test('a snapshot write leaves the dismissed key alone when nothing needs pruning', async () => {
-  reset();
-  await applySnapshot(snap('r1', 1, 2));
-  const dismissed = [1];
-  fake.store[BANNER_DISMISSED_KEY] = dismissed;
-  await applySnapshot(snap('r2', 1, 2, 3));
   assert.equal(fake.store[BANNER_DISMISSED_KEY], dismissed);
+  assert.equal(fake.setCalls, 1);
+
+  const state = await getBannerState();
+  await setBannerDismissed(dismissBanner(state, 4).dismissed);
+  assert.deepEqual([...fake.store[BANNER_DISMISSED_KEY]].sort(), [2, 4]);
 });
 
 test('a maintenance banner survives being stored and read back', async () => {

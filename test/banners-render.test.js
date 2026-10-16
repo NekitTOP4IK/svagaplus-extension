@@ -48,7 +48,8 @@ test('a compact upcoming maintenance plate has the prefix, a mono time and a clo
   assert.ok(plate.classList.contains('svp-notice--maintenance'));
   assert.ok(plate.classList.contains('svp-notice--compact'));
   assert.ok(plate.classList.contains('svp-notice--wrap'));
-  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'Техработы — Обновляем сервер');
+  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'Техработы — Обновляем сервер Будет недолго');
+  assert.equal(plate.querySelector('.svp-notice__lead').textContent, 'Обновляем сервер');
   assert.ok(plate.querySelector('.svp-notice__ver').textContent.length > 0);
   assert.ok(plate.querySelector('button[aria-label="Скрыть"]'));
 });
@@ -77,13 +78,34 @@ test('clicking the close button calls onDismiss', () => {
   assert.equal(dismissed, 1);
 });
 
-test('a compact ordinary banner shows the title, or the message, without a mono time', () => {
+test('a compact ordinary banner shows the message, with the title ahead of it, and no mono time', () => {
   const titled = renderBanner(banner({ title: 'Заголовок' }), 'compact', NOW, FRONTEND, () => {});
-  assert.equal(titled.querySelector('.svp-notice__text').textContent, 'Заголовок');
+  assert.equal(titled.querySelector('.svp-notice__text').textContent, 'Заголовок Что-то новое');
+  assert.equal(titled.querySelector('.svp-notice__lead').textContent, 'Заголовок');
   assert.equal(titled.querySelector('.svp-notice__ver'), null);
 
   const plain = renderBanner(banner(), 'compact', NOW, FRONTEND, () => {});
   assert.equal(plain.querySelector('.svp-notice__text').textContent, 'Что-то новое');
+  assert.equal(plain.querySelector('.svp-notice__lead'), null);
+});
+
+test('a compact plate renders bold markdown in the message', () => {
+  const plate = renderBanner(banner({ message: 'Включите **свагометр**' }), 'compact', NOW, FRONTEND, () => {});
+  assert.equal(plate.querySelector('.svp-notice__text b').textContent, 'свагометр');
+  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'Включите свагометр');
+});
+
+test('a compact plate links a relative target to the frontend', () => {
+  const plate = renderBanner(banner({ message: 'Откройте [настройки](/settings)' }), 'compact', NOW, FRONTEND, () => {});
+  const link = plate.querySelector('.svp-notice__text a');
+  assert.equal(link.textContent, 'настройки');
+  assert.equal(link.getAttribute('href'), 'https://svaga.test/settings');
+});
+
+test('a compact plate keeps a javascript: link as text', () => {
+  const plate = renderBanner(banner({ message: 'Тут [x](javascript:alert(1))' }), 'compact', NOW, FRONTEND, () => {});
+  assert.equal(plate.querySelector('a'), null);
+  assert.equal(plate.querySelector('.svp-notice__text').textContent, 'Тут [x](javascript:alert(1))');
 });
 
 test('the compact icon is labelled with the banner type name', () => {
@@ -170,6 +192,7 @@ test('the connection plate has two lines and a status link', () => {
   const plate = renderConnectionLost(12, () => { dismissed += 1; });
 
   assert.ok(plate.classList.contains('svp-notice--offline'));
+  assert.ok(plate.classList.contains('svp-notice--multiline'));
   assert.ok(plate.textContent.includes('Потеряно соединение с сервером.'));
   assert.ok(plate.textContent.includes('Повтор через 12 с…'));
   const link = plate.querySelector('a');

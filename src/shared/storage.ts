@@ -159,12 +159,9 @@ export async function getBannerState(): Promise<BannerState> {
   return parseBannerState({ snapshot: stored[BANNER_STATE_KEY], dismissed: stored[BANNER_DISMISSED_KEY] });
 }
 
-/** Dismissals live under their own key so a snapshot write never overwrites one. */
-export async function setBannerSnapshot(snapshot: BannerSnapshot, dismissed?: number[]): Promise<void> {
-  await browser.storage.local.set({
-    [BANNER_STATE_KEY]: snapshot,
-    ...(dismissed ? { [BANNER_DISMISSED_KEY]: dismissed } : {}),
-  });
+/** Dismissals live under their own key, so a snapshot write never touches them; `dismissBanner` prunes them to the snapshot on each dismiss. */
+export async function setBannerSnapshot(snapshot: BannerSnapshot): Promise<void> {
+  await browser.storage.local.set({ [BANNER_STATE_KEY]: snapshot });
 }
 
 export async function setBannerDismissed(dismissed: number[]): Promise<void> {

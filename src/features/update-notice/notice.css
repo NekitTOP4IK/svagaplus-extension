@@ -209,7 +209,7 @@
   white-space: normal;
 }
 
-.svp-notice--wrap .svp-notice__body:has(.svp-notice__lines) {
+.svp-notice--multiline .svp-notice__body {
   padding-block: 8px;
 }
 
@@ -239,6 +239,11 @@
   white-space: normal;
 }
 
+.svp-notice__lead {
+  font-weight: 600;
+}
+
+.svp-notice__text a,
 .svp-notice__message a {
   color: var(--n-text) !important;
   border-bottom: 1px solid var(--n-ink);

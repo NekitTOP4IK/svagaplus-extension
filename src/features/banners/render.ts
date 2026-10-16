@@ -69,8 +69,11 @@ export function renderBanner(
   if (variant === 'compact') {
     body.append(iconSvg(banner.type, TYPE_LABELS[banner.type]));
     if (m) body.append(element('span', 'svp-notice__ver', formatMaintenanceMeta(m, now)));
-    const text = banner.title ?? banner.message;
-    body.append(element('span', 'svp-notice__text', m ? `Техработы — ${text}` : text));
+    const text = element('span', 'svp-notice__text');
+    if (m) text.append('Техработы — ');
+    if (banner.title) text.append(element('span', 'svp-notice__lead', banner.title), ' ');
+    text.append(renderMarkdown(banner.message, frontendUrl));
+    body.append(text);
     if (close) body.append(close);
     return root;
   }
@@ -111,7 +114,7 @@ export function retryLabel(secondsLeft: number | null): string {
 }
 
 export function renderConnectionLost(secondsLeft: number | null, onDismiss: () => void): HTMLElement {
-  const root = element('div', 'svp-notice svp-notice--offline svp-notice--compact svp-notice--wrap');
+  const root = element('div', 'svp-notice svp-notice--offline svp-notice--compact svp-notice--wrap svp-notice--multiline');
   root.setAttribute('role', 'status');
   root.lang = 'ru';
   const body = element('div', 'svp-notice__body');

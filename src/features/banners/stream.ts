@@ -8,9 +8,7 @@ export async function applySnapshot(raw: unknown): Promise<boolean> {
   if (!snapshot) return false;
   const state = await getBannerState();
   if (state.snapshot?.revision === snapshot.revision) return false;
-  const present = new Set(snapshot.banners.map((banner) => banner.id));
-  const dismissed = state.dismissed.filter((id) => present.has(id));
-  await setBannerSnapshot(snapshot, dismissed.length === state.dismissed.length ? undefined : dismissed);
+  await setBannerSnapshot(snapshot);
   return true;
 }
 

@@ -104,9 +104,9 @@ export function startChatNotices(): void {
       case 'update':
         return `update:${plate.notice.tone}:${plate.notice.version}`;
       case 'banner': {
-        const { maintenance } = plate.banner;
-        const phase = maintenance ? maintenancePhase(maintenance, now) : '';
-        return `banner:${plate.banner.id}:${banners.snapshot?.revision}:${phase}`;
+        const { id, title, message, dismissible, maintenance } = plate.banner;
+        const times = maintenance ? `${maintenance.startsAt}-${maintenance.endsAt}:${maintenancePhase(maintenance, now)}` : '';
+        return `banner:${JSON.stringify([id, title, message, dismissible, times])}`;
       }
       case 'connection':
         return 'connection';

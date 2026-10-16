@@ -243,6 +243,20 @@ test('the unsupported-version warning is shown above a danger banner', async () 
   assert.match(plateText(), /urgent/);
 });
 
+test('editing a popup-only banner does not rebuild the chat plate', async () => {
+  await putState([wire(40, { message: 'for chat' }), wire(41, { message: 'popup v1', targets: ['popup'] })]);
+  const plate = document.querySelector('#chat .svp-notice');
+  assert.match(plate.textContent, /for chat/);
+
+  await putState([wire(40, { message: 'for chat' }), wire(41, { message: 'popup v2', targets: ['popup'] })]);
+  assert.equal(document.querySelector('#chat .svp-notice'), plate);
+
+  await putState([wire(40, { message: 'chat edited' }), wire(41, { message: 'popup v2', targets: ['popup'] })]);
+  assert.notEqual(document.querySelector('#chat .svp-notice'), plate);
+  assert.match(plateText(), /chat edited/);
+  await putState([]);
+});
+
 test('the popup stack shows every popup banner in full and dismisses one at a time', async () => {
   const container = document.getElementById('stack');
   await putState([
