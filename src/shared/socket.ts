@@ -6,6 +6,7 @@ const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 15000;
 const JITTER = 0.7;
 const MANUAL_DISCONNECT = 'io client disconnect';
+const LOG_PREFIX = '[Svaga+ socket]';
 
 export interface IoSocket {
   on(event: string, handler: (...args: any[]) => void): unknown;
@@ -54,9 +55,17 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
 
   const snapshot = (): ConnectionState => ({ ...state });
 
+  const safely = (fn: () => void): void => {
+    try {
+      fn();
+    } catch (error) {
+      console.warn(LOG_PREFIX, 'listener threw', error);
+    }
+  };
+
   const setState = (next: ConnectionState): void => {
     state = next;
-    for (const listener of [...stateListeners]) listener(snapshot());
+    for (const listener of [...stateListeners]) safely(() => listener(snapshot()));
   };
 
   const clearRetry = (): void => {
@@ -71,8 +80,8 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
     const delay = reconnectDelay(failedAttempts, deps.random());
     retryTimer = deps.setTimer(() => {
       retryTimer = null;
-      setState({ ...state, nextRetryAt: null });
       socket.connect();
+      setState({ ...state, nextRetryAt: null });
     }, delay);
     setState({ connected: false, failedAttempts, nextRetryAt: deps.now() + delay });
   };
@@ -80,7 +89,7 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
   socket.on('connect', () => {
     clearRetry();
     setState({ connected: true, failedAttempts: 0, nextRetryAt: null });
-    for (const handler of [...connectHandlers]) handler();
+    for (const handler of [...connectHandlers]) safely(handler);
   });
 
   socket.on('connect_error', registerFailure);
@@ -96,6 +105,7 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
 
   return {
     emit(event, data) {
+      if (!state.connected) return;
       socket.emit(event, data);
     },
     on(event, handler) {
@@ -106,7 +116,7 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
     },
     onConnect(handler) {
       connectHandlers.add(handler);
-      if (state.connected) handler();
+      if (state.connected) safely(handler);
       return () => {
         connectHandlers.delete(handler);
       };

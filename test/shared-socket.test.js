@@ -180,10 +180,81 @@ test('on() subscribes to socket events and returns an unsubscribe', () => {
   assert.deepStrictEqual(got, [{ a: 1 }]);
 });
 
-test('emit forwards to the socket', () => {
-  const { shared, calls } = setup();
+test('emit forwards to the socket while connected', () => {
+  const { shared, fire, calls } = setup();
+  fire('connect');
   shared.emit('join_channel', { channel_name: 'x' });
   assert.deepStrictEqual(calls.emit, [['join_channel', { channel_name: 'x' }]]);
+});
+
+test('emit is a no-op while disconnected so the send buffer cannot replay it', () => {
+  const { shared, fire, calls } = setup();
+  shared.emit('join_channel', { channel_name: 'x' });
+  fire('connect');
+  fire('disconnect', 'transport close');
+  shared.emit('subscribe_banners');
+  assert.deepStrictEqual(calls.emit, []);
+});
+
+test('a throwing state listener does not stop the retry timer from calling connect()', () => {
+  const { shared, fire, calls, runTimers } = setup();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    shared.onState(() => { throw new Error('boom'); });
+    let reached = 0;
+    shared.onState(() => { reached += 1; });
+    fire('connect_error', new Error('x'));
+    runTimers();
+    assert.strictEqual(calls.connect, 1);
+    assert.strictEqual(reached, 2);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('a throwing onConnect handler does not stop the others', () => {
+  const { shared, fire } = setup();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    let called = 0;
+    shared.onConnect(() => { throw new Error('boom'); });
+    shared.onConnect(() => { called += 1; });
+    fire('connect');
+    assert.strictEqual(called, 1);
+    assert.strictEqual(shared.state().connected, true);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('a failure after a fired retry timer counts as the next attempt with one pending timer', () => {
+  const { shared, fire, calls, timers, runTimers, setTime } = setup({ random: 0.25 });
+  const seen = [];
+  shared.onState((s) => seen.push({ ...s }));
+  fire('connect_error', new Error('x'));
+  runTimers();
+  assert.strictEqual(calls.connect, 1);
+  assert.deepStrictEqual(seen[seen.length - 1], { connected: false, failedAttempts: 1, nextRetryAt: null });
+  setTime(5_000);
+  fire('connect_error', new Error('x'));
+  const state = shared.state();
+  assert.strictEqual(state.failedAttempts, 2);
+  assert.strictEqual(state.nextRetryAt, 5_000 + reconnectDelay(2, 0.25));
+  assert.strictEqual(timers.size, 1);
+});
+
+test('handlers registered with on() keep receiving events after a reconnect', () => {
+  const { shared, fire, runTimers } = setup();
+  const got = [];
+  shared.on('badge_update', (msg) => got.push(msg));
+  fire('connect');
+  fire('disconnect', 'transport close');
+  runTimers();
+  fire('connect');
+  fire('badge_update', { a: 1 });
+  assert.deepStrictEqual(got, [{ a: 1 }]);
 });
 
 test('getSharedSocket is lazy, null without a global io, and a singleton otherwise', () => {
