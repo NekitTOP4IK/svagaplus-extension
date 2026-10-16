@@ -18,9 +18,9 @@ const TYPE_LABELS: Record<BannerType, string> = {
 };
 
 const AFFECTED_LABELS: Record<string, string> = {
-  obs_alerts: 'OBS-алерты',
+  obs_alerts: 'Алерты в OBS',
   chat_badges: 'Бейджи в чате',
-  dashboard: 'Панель',
+  dashboard: 'Дашборд',
   tribute_webhooks: 'Вебхуки Tribute',
   extension: 'Расширение',
 };

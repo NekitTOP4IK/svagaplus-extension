@@ -204,15 +204,8 @@
   font-size: 13px;
 }
 
-/* Banner and connection plates: text wraps and the plate grows in height. */
-
-.svp-notice--wrap .svp-notice__body {
-  align-items: center;
-  min-height: 36px;
-  padding: 4px 4px 4px 12px;
-}
-
 .svp-notice--wrap .svp-notice__text {
+  flex: 1;
   white-space: normal;
 }
 
@@ -220,18 +213,9 @@
   padding-block: 8px;
 }
 
-.svp-notice--wrap .svp-notice__text {
-  flex: 1;
-}
-
 .svp-notice__icon {
   flex: none;
   color: var(--n-ink);
-}
-
-.svp-notice--wrap.svp-notice--expanded .svp-notice__body {
-  align-items: stretch;
-  padding: 10px 4px 12px 14px;
 }
 
 .svp-notice__heading {
@@ -256,9 +240,9 @@
 }
 
 .svp-notice__message a {
-  color: var(--n-text);
+  color: var(--n-text) !important;
   border-bottom: 1px solid var(--n-ink);
-  text-decoration: none;
+  text-decoration: none !important;
 }
 
 .svp-notice__chips {

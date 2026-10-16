@@ -118,7 +118,7 @@ test('an expanded maintenance plate has the header, the range, chips and a statu
   assert.ok(plate.querySelector('.svp-notice__ver').textContent.includes('–'));
   assert.deepEqual(
     [...plate.querySelectorAll('.svp-notice__chip')].map((chip) => chip.textContent),
-    ['OBS-алерты', 'Расширение', 'Почта'],
+    ['Алерты в OBS', 'Расширение', 'Почта'],
   );
   const link = plate.querySelector('a.svp-notice__link');
   assert.equal(link.textContent, 'Статус сервиса ↗');
@@ -135,7 +135,7 @@ test('known affected keys map to their chip labels', () => {
   const plate = renderBanner(upcoming({ maintenance: m }), 'expanded', NOW, FRONTEND, () => {});
   assert.deepEqual(
     [...plate.querySelectorAll('.svp-notice__chip')].map((chip) => chip.textContent),
-    ['OBS-алерты', 'Бейджи в чате', 'Панель', 'Вебхуки Tribute', 'Расширение'],
+    ['Алерты в OBS', 'Бейджи в чате', 'Дашборд', 'Вебхуки Tribute', 'Расширение'],
   );
 });
 
@@ -184,4 +184,5 @@ test('the connection plate drops the retry line when there is no countdown', () 
   const plate = renderConnectionLost(null, () => {});
   assert.ok(plate.textContent.includes('Потеряно соединение с сервером.'));
   assert.ok(!plate.textContent.includes('Повтор'));
+  assert.equal(plate.querySelector('a').href, 'https://status.svagaplus.com/');
 });
