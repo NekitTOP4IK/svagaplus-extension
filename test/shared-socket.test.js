@@ -187,6 +187,34 @@ test('emit forwards to the socket while connected', () => {
   assert.deepStrictEqual(calls.emit, [['join_channel', { channel_name: 'x' }]]);
 });
 
+test('emit sends no trailing arguments for missing data or ack', () => {
+  const { shared, fire, calls } = setup();
+  fire('connect');
+  const ack = () => {};
+  shared.emit('subscribe_banners');
+  shared.emit('leave_channel', { channel_name: 'x' });
+  shared.emit('join_channel', { channel_name: 'x' }, ack);
+  assert.deepStrictEqual(calls.emit, [
+    ['subscribe_banners'],
+    ['leave_channel', { channel_name: 'x' }],
+    ['join_channel', { channel_name: 'x' }, ack],
+  ]);
+});
+
+test('connect_error logs its message once per failure', () => {
+  const { fire, runTimers } = setup();
+  const warn = console.warn;
+  const logged = [];
+  console.warn = (...args) => logged.push(args);
+  try {
+    fire('connect_error', new Error('xhr poll error'));
+    runTimers();
+  } finally {
+    console.warn = warn;
+  }
+  assert.deepStrictEqual(logged, [['[Svaga+ socket]', 'connect_error', 'xhr poll error']]);
+});
+
 test('emit passes the ack callback through to the socket', () => {
   const { shared, fire, calls } = setup();
   fire('connect');

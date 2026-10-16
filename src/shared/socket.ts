@@ -92,7 +92,10 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
     for (const handler of [...connectHandlers]) safely(handler);
   });
 
-  socket.on('connect_error', registerFailure);
+  socket.on('connect_error', (error: unknown) => {
+    console.warn(LOG_PREFIX, 'connect_error', error instanceof Error ? error.message : String(error));
+    registerFailure();
+  });
 
   socket.on('disconnect', (reason: string) => {
     if (reason === MANUAL_DISCONNECT) {
@@ -106,9 +109,11 @@ export function createSharedSocket(deps: SharedSocketDeps): SharedSocket {
   return {
     emit(event, data, ack) {
       if (!state.connected) return;
-      // socket.io would send a trailing undefined as an extra argument.
-      if (ack) socket.emit(event, data, ack);
-      else socket.emit(event, data);
+      // socket.io sends a trailing undefined as null, and Flask-SocketIO then
+      // passes it to handlers that take no arguments.
+      const args: unknown[] = data === undefined ? [] : [data];
+      if (ack) args.push(ack);
+      socket.emit(event, ...args);
     },
     on(event, handler) {
       socket.on(event, handler);

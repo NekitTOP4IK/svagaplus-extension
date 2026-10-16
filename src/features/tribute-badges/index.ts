@@ -57,6 +57,7 @@ let channelMode: SnapshotMode | null = null;
 let channelSession = 0;
 let joinGeneration = 0;
 let joinedCurrentChannel = false;
+let leftRoomOnThisConnection = false;
 let awaitingJoinAck = true;
 let joinAckTimer: number | null = null;
 let styleRafPending = false;
@@ -619,7 +620,7 @@ function joinChannel(socket: SharedSocket, channelName: string): void {
   const reconnect = joinedCurrentChannel;
   const shouldFetch = reconnect || !initialFetchSucceeded;
   joinedCurrentChannel = true;
-  awaitingJoinAck = true;
+  awaitingJoinAck = leftRoomOnThisConnection;
   const generation = ++joinGeneration;
   if (joinAckTimer) clearTimeout(joinAckTimer);
   // The fetch waits for the ack so a revision mismatch reaches the background
@@ -642,8 +643,9 @@ function joinChannel(socket: SharedSocket, channelName: string): void {
 }
 
 function leaveRealtimeChannel(): void {
-  if (joinedCurrentChannel && currentChannelName) {
-    realtimeSocket?.emit('leave_channel', { channel_name: currentChannelName });
+  if (joinedCurrentChannel && currentChannelName && realtimeSocket?.state().connected) {
+    realtimeSocket.emit('leave_channel', { channel_name: currentChannelName });
+    leftRoomOnThisConnection = true;
   }
   channelSession += 1;
   joinGeneration += 1;
@@ -676,6 +678,7 @@ function bindSharedSocket(): SharedSocket | null {
   realtimeSocket = socket;
 
   socket.onConnect(() => {
+    leftRoomOnThisConnection = false;
     const channelName = currentChannelName;
     console.info(LOG_PREFIX, 'socket connected', { channelName, mode: channelMode });
     if (channelName && (channelMode === 'snapshot' || channelMode === 'legacy')) joinChannel(socket, channelName);
@@ -697,8 +700,9 @@ function bindSharedSocket(): SharedSocket | null {
 
 function handleBadgeUpdate(msg: any): void {
   const channelName = currentChannelName;
-  // badge_update carries no channel, so until the current join is acked it may
-  // still come from the room just left; socket.io delivers those before the ack.
+  // badge_update carries no channel, so after a leave on this connection it may
+  // still come from the room just left until the new join is acked; socket.io
+  // delivers those before the ack. A fresh connection has no old room.
   if (!msg || !channelName || awaitingJoinAck) return;
   if (DEBUG) console.debug(LOG_PREFIX, 'badge_update raw', msg);
   if (SNAPSHOT_FORWARDED_BADGE_UPDATES.has(msg.type)) forwardSnapshotEvent(channelName, msg);

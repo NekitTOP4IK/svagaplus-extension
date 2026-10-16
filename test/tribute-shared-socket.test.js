@@ -161,20 +161,6 @@ test('tribute badges ride the shared socket across channel changes', { timeout: 
   socket.ackJoin('qux', { channel: 'qux', known: true, rev: 1, global_rev: 1 });
   await wait();
 
-  log.length = 0;
-  messages.length = 0;
-  history.pushState({}, '', '/directory');
-  await wait();
-  socket.fire('disconnect', 'transport close');
-  socket.fire('connect');
-  await wait();
-  assert.deepEqual(log, [['leave_channel', 'qux']], 'a page without a channel leaves and never joins');
-  assert.equal(getSharedSocket().state().connected, true, 'the socket lives on /directory');
-  socket.fire('badge_update', { type: 'channel_refresh', rev: 2 });
-  socket.fire('badge_grants_updated', { channel: 'qux', rev: 2 });
-  await wait();
-  assert.deepEqual(messages, [], 'no channel, nothing handled or forwarded');
-
   messages.length = 0;
   history.pushState({}, '', '/old');
   await wait();
@@ -186,6 +172,20 @@ test('tribute badges ride the shared socket across channel changes', { timeout: 
   await wait();
   assert.ok(messages.some((m) => m.type === 'INVALIDATE_TRIBUTE_BADGE_CACHE' && m.channelLogin === 'old'),
     'an old backend that never acks is handled after the timeout');
+
+  log.length = 0;
+  messages.length = 0;
+  history.pushState({}, '', '/directory');
+  await wait();
+  socket.fire('disconnect', 'transport close');
+  socket.fire('connect');
+  await wait();
+  assert.deepEqual(log, [['leave_channel', 'old']], 'a page without a channel leaves and never joins');
+  assert.equal(getSharedSocket().state().connected, true, 'the socket lives on /directory');
+  socket.fire('badge_update', { type: 'channel_refresh', rev: 2 });
+  socket.fire('badge_grants_updated', { channel: 'old', rev: 2 });
+  await wait();
+  assert.deepEqual(messages, [], 'no channel, nothing handled or forwarded');
 
   assert.equal(io.sockets.length, 1);
 });

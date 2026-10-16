@@ -7,12 +7,18 @@ function createFakeSocket(url, options) {
     options,
     emits: [],
     connectCalls: 0,
+    // Arrays like socket.io's Emitter, so a duplicate registration fires twice.
     on(event, handler) {
-      if (!handlers.has(event)) handlers.set(event, new Set());
-      handlers.get(event).add(handler);
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event).push(handler);
     },
     off(event, handler) {
-      handlers.get(event)?.delete(handler);
+      const list = handlers.get(event);
+      const index = list ? list.indexOf(handler) : -1;
+      if (index >= 0) list.splice(index, 1);
+    },
+    handlerCount(event) {
+      return handlers.get(event)?.length ?? 0;
     },
     emit(...args) {
       socket.emits.push(args);
