@@ -1,6 +1,7 @@
 import browser from './browser';
 import type { ExtensionSettings, RuntimeChannelState, ViewerAccount, ViewerAuthFeedback } from './types';
 import { parseUpdateState, type UpdateState } from '../features/update-notice/model';
+import { parseBannerState, type BannerState } from '../features/banners/model';
 
 const SETTINGS_KEY = 'svagaplus_settings';
 const VIEWER_ACCOUNT_KEY = 'svagaplus_viewer_account';
@@ -147,5 +148,16 @@ export async function getUpdateState(): Promise<UpdateState> {
 
 export async function setUpdateState(state: UpdateState): Promise<UpdateState> {
   await browser.storage.local.set({ [UPDATE_STATE_KEY]: state });
+  return state;
+}
+
+export const BANNER_STATE_KEY = 'svagaplus_banner_state';
+
+export async function getBannerState(): Promise<BannerState> {
+  return parseBannerState(await readValue<unknown>(BANNER_STATE_KEY));
+}
+
+export async function setBannerState(state: BannerState): Promise<BannerState> {
+  await browser.storage.local.set({ [BANNER_STATE_KEY]: state });
   return state;
 }
