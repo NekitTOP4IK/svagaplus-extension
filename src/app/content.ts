@@ -20,7 +20,8 @@ function maybeStartSocialRating(enabled: boolean): void {
 function startSafely(start: () => void): void {
   try {
     start();
-  } catch {
+  } catch (error) {
+    console.warn('[Svaga+]', `${start.name} failed`, error);
   }
 }
 
