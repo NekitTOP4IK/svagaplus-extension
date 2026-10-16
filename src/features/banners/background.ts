@@ -11,7 +11,9 @@ async function checkBanners(): Promise<void> {
   const headers: Record<string, string> = snapshot ? { 'If-None-Match': `"${snapshot.revision}"` } : {};
   const response = await fetch(`${BACKEND_URL}/api/extension/banners`, { cache: 'no-store', headers });
   if (!response.ok) return;
-  await applySnapshot(await response.json());
+  const body: unknown = await response.json();
+  const enveloped = typeof body === 'object' && body !== null && (body as { success?: unknown }).success === true;
+  if (enveloped) await applySnapshot((body as { data?: unknown }).data);
 }
 
 async function ensureAlarm(): Promise<void> {

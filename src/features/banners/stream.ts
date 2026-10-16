@@ -1,5 +1,5 @@
 import { getSharedSocket } from '../../shared/socket';
-import { getBannerState, setBannerState } from '../../shared/storage';
+import { getBannerState, setBannerSnapshot } from '../../shared/storage';
 import { parseSnapshot } from './model';
 
 /** Stores a snapshot only when its revision is new, so tabs receiving one broadcast do not rewrite storage. */
@@ -9,7 +9,8 @@ export async function applySnapshot(raw: unknown): Promise<boolean> {
   const state = await getBannerState();
   if (state.snapshot?.revision === snapshot.revision) return false;
   const present = new Set(snapshot.banners.map((banner) => banner.id));
-  await setBannerState({ snapshot, dismissed: state.dismissed.filter((id) => present.has(id)) });
+  const dismissed = state.dismissed.filter((id) => present.has(id));
+  await setBannerSnapshot(snapshot, dismissed.length === state.dismissed.length ? undefined : dismissed);
   return true;
 }
 

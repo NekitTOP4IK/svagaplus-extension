@@ -100,6 +100,22 @@ test('parseBannerState tolerates garbage and sanitizes the stored shape', () => 
   assert.deepEqual(parsed.dismissed, [3, 4]);
 });
 
+test('the stored state round-trips through JSON, maintenance banners included', () => {
+  const stored = state({
+    snapshot: { revision: 'r1', banners: [banner({ id: 1 }), works({ id: 2, maintenance: maintenance({ affectedExtra: 'Почта' }) })] },
+    dismissed: [1],
+  });
+  assert.deepEqual(parseBannerState(JSON.parse(JSON.stringify(stored))), stored);
+});
+
+test('a stored maintenance banner with broken times is dropped, not half-kept', () => {
+  const parsed = parseBannerState({
+    snapshot: { revision: 'r1', banners: [{ ...works(), maintenance: { startsAt: 'x', endsAt: END, affected: [] } }, banner({ id: 3 })] },
+    dismissed: [],
+  });
+  assert.deepEqual(parsed.snapshot.banners.map((item) => item.id), [3]);
+});
+
 test('maintenancePhase flips at the start and ends exactly at endsAt', () => {
   const m = maintenance();
   assert.equal(maintenancePhase(m, START - 1), 'upcoming');

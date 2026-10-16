@@ -1,7 +1,7 @@
 import browser from './browser';
 import type { ExtensionSettings, RuntimeChannelState, ViewerAccount, ViewerAuthFeedback } from './types';
 import { parseUpdateState, type UpdateState } from '../features/update-notice/model';
-import { parseBannerState, type BannerState } from '../features/banners/model';
+import { parseBannerState, type BannerSnapshot, type BannerState } from '../features/banners/model';
 
 const SETTINGS_KEY = 'svagaplus_settings';
 const VIEWER_ACCOUNT_KEY = 'svagaplus_viewer_account';
@@ -152,12 +152,21 @@ export async function setUpdateState(state: UpdateState): Promise<UpdateState> {
 }
 
 export const BANNER_STATE_KEY = 'svagaplus_banner_state';
+export const BANNER_DISMISSED_KEY = 'svagaplus_banner_dismissed';
 
 export async function getBannerState(): Promise<BannerState> {
-  return parseBannerState(await readValue<unknown>(BANNER_STATE_KEY));
+  const stored = await browser.storage.local.get([BANNER_STATE_KEY, BANNER_DISMISSED_KEY]) as Record<string, unknown>;
+  return parseBannerState({ snapshot: stored[BANNER_STATE_KEY], dismissed: stored[BANNER_DISMISSED_KEY] });
 }
 
-export async function setBannerState(state: BannerState): Promise<BannerState> {
-  await browser.storage.local.set({ [BANNER_STATE_KEY]: state });
-  return state;
+/** Dismissals live under their own key so a snapshot write never overwrites one. */
+export async function setBannerSnapshot(snapshot: BannerSnapshot, dismissed?: number[]): Promise<void> {
+  await browser.storage.local.set({
+    [BANNER_STATE_KEY]: snapshot,
+    ...(dismissed ? { [BANNER_DISMISSED_KEY]: dismissed } : {}),
+  });
+}
+
+export async function setBannerDismissed(dismissed: number[]): Promise<void> {
+  await browser.storage.local.set({ [BANNER_DISMISSED_KEY]: dismissed });
 }

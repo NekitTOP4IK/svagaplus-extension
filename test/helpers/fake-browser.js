@@ -21,7 +21,11 @@ function createFakeBrowser(initial = {}) {
     onInstalled,
     storage: {
       local: {
-        get: async (key) => (typeof key === 'string' ? (key in store ? { [key]: store[key] } : {}) : { ...store }),
+        get: async (keys) => {
+          const wanted = typeof keys === 'string' ? [keys] : keys;
+          if (!wanted) return { ...store };
+          return Object.fromEntries(wanted.filter((key) => key in store).map((key) => [key, store[key]]));
+        },
         set: async (values) => {
           fake.setCalls += 1;
           const changes = {};

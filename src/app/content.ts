@@ -17,9 +17,16 @@ function maybeStartSocialRating(enabled: boolean): void {
   }
 }
 
-startTributeBadgesContent();
-startBannerStream();
-startChatNotices();
+function startSafely(start: () => void): void {
+  try {
+    start();
+  } catch {
+  }
+}
+
+startSafely(startBannerStream);
+startSafely(startChatNotices);
+startSafely(startTributeBadgesContent);
 
 getExtensionSettings()
   .then((settings) => {

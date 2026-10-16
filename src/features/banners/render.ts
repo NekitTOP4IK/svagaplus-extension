@@ -106,6 +106,10 @@ export function renderBanner(
   return root;
 }
 
+export function retryLabel(secondsLeft: number | null): string {
+  return secondsLeft === null ? 'Подключение…' : `Повтор через ${secondsLeft} с…`;
+}
+
 export function renderConnectionLost(secondsLeft: number | null, onDismiss: () => void): HTMLElement {
   const root = element('div', 'svp-notice svp-notice--offline svp-notice--compact svp-notice--wrap');
   root.setAttribute('role', 'status');
@@ -116,7 +120,7 @@ export function renderConnectionLost(secondsLeft: number | null, onDismiss: () =
   const lines = element('span', 'svp-notice__lines');
   lines.append(element('span', 'svp-notice__text', 'Потеряно соединение с сервером.'));
   const second = element('span', 'svp-notice__sub');
-  if (secondsLeft !== null) second.append(element('span', 'svp-notice__muted', `Повтор через ${secondsLeft} с…`));
+  second.append(element('span', 'svp-notice__muted', retryLabel(secondsLeft)));
   second.append(statusLink('Статус ↗'));
   lines.append(second);
 

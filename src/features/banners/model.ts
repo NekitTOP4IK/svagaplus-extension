@@ -65,16 +65,34 @@ function timestamp(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseMaintenance(value: unknown): MaintenancePayload | null {
-  if (!isRecord(value)) return null;
-  const startsAt = timestamp(value.starts_at);
-  const endsAt = timestamp(value.ends_at);
+function maintenanceOf(
+  startsAt: number | null,
+  endsAt: number | null,
+  affectedRaw: unknown,
+  affectedExtra: unknown,
+): MaintenancePayload | null {
   if (startsAt === null || endsAt === null || endsAt <= startsAt) return null;
-  const affected = Array.isArray(value.affected) ? value.affected.filter((item): item is string => typeof item === 'string') : [];
-  return { startsAt, endsAt, affected, affectedExtra: text(value.affected_extra) };
+  const affected = Array.isArray(affectedRaw) ? affectedRaw.filter((item): item is string => typeof item === 'string') : [];
+  return { startsAt, endsAt, affected, affectedExtra: text(affectedExtra) };
 }
 
-function parseBanner(value: unknown): Banner | null {
+function parseWireMaintenance(value: unknown): MaintenancePayload | null {
+  if (!isRecord(value)) return null;
+  return maintenanceOf(timestamp(value.starts_at), timestamp(value.ends_at), value.affected, value.affected_extra);
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseStoredMaintenance(value: unknown): MaintenancePayload | null {
+  if (!isRecord(value)) return null;
+  return maintenanceOf(finite(value.startsAt), finite(value.endsAt), value.affected, value.affectedExtra);
+}
+
+type Source = 'wire' | 'stored';
+
+function parseBanner(value: unknown, source: Source): Banner | null {
   if (!isRecord(value)) return null;
   const { id, type } = value;
   if (typeof id !== 'number' || !Number.isInteger(id)) return null;
@@ -84,7 +102,9 @@ function parseBanner(value: unknown): Banner | null {
   const targets = Array.isArray(value.targets)
     ? BANNER_TARGETS.filter((target) => (value.targets as unknown[]).includes(target))
     : [];
-  const maintenance = type === 'maintenance' ? parseMaintenance(value.payload) : null;
+  const maintenance = type !== 'maintenance'
+    ? null
+    : source === 'wire' ? parseWireMaintenance(value.payload) : parseStoredMaintenance(value.maintenance);
   if (type === 'maintenance' && !maintenance) return null;
   return {
     id,
@@ -97,22 +117,28 @@ function parseBanner(value: unknown): Banner | null {
   };
 }
 
-export function parseSnapshot(value: unknown): BannerSnapshot | null {
+function parseSnapshotFrom(value: unknown, source: Source): BannerSnapshot | null {
   if (!isRecord(value) || typeof value.revision !== 'string' || !Array.isArray(value.banners)) return null;
   const banners: Banner[] = [];
   for (const entry of value.banners) {
-    const banner = parseBanner(entry);
+    const banner = parseBanner(entry, source);
     if (banner) banners.push(banner);
   }
   return { revision: value.revision, banners };
 }
 
+/** Parses the server's wire shape, where maintenance times are ISO strings under `payload`. */
+export function parseSnapshot(value: unknown): BannerSnapshot | null {
+  return parseSnapshotFrom(value, 'wire');
+}
+
+/** Reads what `storage.local` holds, which is the parsed snapshot rather than the wire shape. */
 export function parseBannerState(value: unknown): BannerState {
   if (!isRecord(value)) return { snapshot: null, dismissed: [] };
   const dismissed = Array.isArray(value.dismissed)
     ? [...new Set(value.dismissed.filter((id): id is number => typeof id === 'number' && Number.isInteger(id)))]
     : [];
-  return { snapshot: parseSnapshot(value.snapshot), dismissed };
+  return { snapshot: parseSnapshotFrom(value.snapshot, 'stored'), dismissed };
 }
 
 export function maintenancePhase(m: MaintenancePayload, now: number): MaintenancePhase {

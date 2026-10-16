@@ -180,9 +180,10 @@ test('the connection plate has two lines and a status link', () => {
   assert.equal(dismissed, 1);
 });
 
-test('the connection plate drops the retry line when there is no countdown', () => {
+test('the connection plate says it is reconnecting while there is no countdown', () => {
   const plate = renderConnectionLost(null, () => {});
   assert.ok(plate.textContent.includes('Потеряно соединение с сервером.'));
+  assert.ok(plate.querySelector('.svp-notice__muted').textContent === 'Подключение…');
   assert.ok(!plate.textContent.includes('Повтор'));
   assert.equal(plate.querySelector('a').href, 'https://status.svagaplus.com/');
 });

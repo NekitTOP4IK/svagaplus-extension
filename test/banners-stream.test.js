@@ -10,7 +10,8 @@ const io = installFakeIo();
 
 const { applySnapshot, startBannerStream } = require('../dist-types/features/banners/stream.js');
 const { startBannerChecks } = require('../dist-types/features/banners/background.js');
-const { BANNER_STATE_KEY } = require('../dist-types/shared/storage.js');
+const { BANNER_STATE_KEY, BANNER_DISMISSED_KEY, getBannerState, setBannerDismissed } = require('../dist-types/shared/storage.js');
+const { dismissBanner } = require('../dist-types/features/banners/model.js');
 const { getSharedSocket } = require('../dist-types/shared/socket.js');
 
 const wire = (id, extra = {}) => ({
@@ -24,27 +25,36 @@ const wire = (id, extra = {}) => ({
 });
 const snap = (revision, ...ids) => ({ revision, banners: ids.map((id) => wire(id)) });
 
-function reset(state) {
+function reset() {
   for (const key of Object.keys(fake.store)) delete fake.store[key];
-  if (state) fake.store[BANNER_STATE_KEY] = state;
   fake.setCalls = 0;
 }
 
 const stored = () => fake.store[BANNER_STATE_KEY];
+const maintenance = (id) => wire(id, {
+  type: 'maintenance',
+  payload: {
+    starts_at: '2026-10-20T10:00:00Z',
+    ends_at: '2026-10-20T12:00:00Z',
+    affected: ['extension'],
+    affected_extra: 'Почта',
+  },
+});
+const envelope = (data) => ({ success: true, data });
 
 test('the same revision is written once', async () => {
   reset();
   assert.equal(await applySnapshot(snap('r1', 1)), true);
   assert.equal(await applySnapshot(snap('r1', 1)), false);
   assert.equal(fake.setCalls, 1);
-  assert.equal(stored().snapshot.revision, 'r1');
+  assert.equal(stored().revision, 'r1');
 });
 
 test('a new revision replaces the snapshot', async () => {
   reset();
   await applySnapshot(snap('r1', 1));
   assert.equal(await applySnapshot(snap('r2', 1, 2)), true);
-  assert.deepEqual(stored().snapshot.banners.map((b) => b.id), [1, 2]);
+  assert.deepEqual(stored().banners.map((b) => b.id), [1, 2]);
   assert.equal(fake.setCalls, 2);
 });
 
@@ -57,10 +67,48 @@ test('garbage leaves storage untouched', async () => {
 });
 
 test('a stored snapshot drops dismissed ids that are gone from it', async () => {
-  reset({ snapshot: snap('r1', 1, 2, 3), dismissed: [1, 2, 3] });
+  reset();
+  await applySnapshot(snap('r1', 1, 2, 3));
+  await setBannerDismissed([1, 2, 3]);
+  fake.setCalls = 0;
   assert.equal(await applySnapshot(snap('r2', 2, 4)), true);
-  assert.deepEqual(stored().dismissed, [2]);
-  assert.deepEqual(stored().snapshot.banners.map((b) => b.id), [2, 4]);
+  assert.deepEqual(fake.store[BANNER_DISMISSED_KEY], [2]);
+  assert.deepEqual(stored().banners.map((b) => b.id), [2, 4]);
+  assert.equal(fake.setCalls, 1);
+});
+
+test('a snapshot write leaves the dismissed key alone when nothing needs pruning', async () => {
+  reset();
+  await applySnapshot(snap('r1', 1, 2));
+  const dismissed = [1];
+  fake.store[BANNER_DISMISSED_KEY] = dismissed;
+  await applySnapshot(snap('r2', 1, 2, 3));
+  assert.equal(fake.store[BANNER_DISMISSED_KEY], dismissed);
+});
+
+test('a maintenance banner survives being stored and read back', async () => {
+  reset();
+  await applySnapshot({ revision: 'm1', banners: [wire(1), maintenance(2)] });
+  const state = await getBannerState();
+  assert.deepEqual(state.snapshot.banners.map((b) => b.id), [1, 2]);
+  assert.deepEqual(state.snapshot.banners[1].maintenance, {
+    startsAt: Date.parse('2026-10-20T10:00:00Z'),
+    endsAt: Date.parse('2026-10-20T12:00:00Z'),
+    affected: ['extension'],
+    affectedExtra: 'Почта',
+  });
+});
+
+test('dismissing another banner keeps the maintenance banner and does not touch the snapshot', async () => {
+  reset();
+  await applySnapshot({ revision: 'm1', banners: [wire(1), maintenance(2)] });
+  const snapshotBefore = stored();
+  const state = await getBannerState();
+  await setBannerDismissed(dismissBanner(state, 1).dismissed);
+  assert.equal(stored(), snapshotBefore);
+  const after = await getBannerState();
+  assert.deepEqual(after.dismissed, [1]);
+  assert.deepEqual(after.snapshot.banners.map((b) => b.id), [1, 2]);
 });
 
 test('startBannerStream subscribes on connect and stores streamed snapshots', async () => {
@@ -74,8 +122,8 @@ test('startBannerStream subscribes on connect and stores streamed snapshots', as
 
   socket.fire('extension_banners', snap('r9', 7));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(stored().snapshot.revision, 'r9');
-  assert.deepEqual(stored().snapshot.banners.map((b) => b.id), [7]);
+  assert.equal(stored().revision, 'r9');
+  assert.deepEqual(stored().banners.map((b) => b.id), [7]);
 
   socket.fire('disconnect', 'transport close');
   socket.fire('connect');
@@ -95,7 +143,7 @@ test('startBannerChecks registers listeners synchronously and arms the alarm', a
   global.fetch = async (url, init) => {
     requests.push([url, init]);
     return requests.length === 1
-      ? { ok: true, status: 200, json: async () => snap('r5', 1) }
+      ? { ok: true, status: 200, json: async () => envelope(snap('r5', 1)) }
       : { ok: false, status: 304, json: async () => assert.fail('304 has no body') };
   };
 
@@ -103,7 +151,7 @@ test('startBannerChecks registers listeners synchronously and arms the alarm', a
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(fake.alarmCreates.at(-1), ['svagaplus-banners-check', { periodInMinutes: 30 }]);
   assert.equal(requests[0][0], 'https://example.test/api/extension/banners');
-  assert.equal(stored().snapshot.revision, 'r5');
+  assert.equal(stored().revision, 'r5');
   assert.equal(fake.setCalls, 1);
 
   fake.onAlarm.list[0]({ name: 'svagaplus-banners-check' });
@@ -126,4 +174,27 @@ test('a failed poll changes nothing', async () => {
   fake.onStartup.list[0]();
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(fake.setCalls, 0);
+});
+
+test('an unsuccessful or unwrapped poll body stores nothing', async () => {
+  reset();
+  for (const body of [
+    { success: false, data: snap('r6', 1) },
+    snap('r6', 1),
+    { success: true },
+    { success: true, data: 'garbage' },
+  ]) {
+    global.fetch = async () => ({ ok: true, status: 200, json: async () => body });
+    fake.onStartup.list[0]();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(fake.setCalls, 0);
+});
+
+test('a polled maintenance banner is readable from storage', async () => {
+  reset();
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => envelope({ revision: 'm2', banners: [maintenance(5)] }) });
+  fake.onStartup.list[0]();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual((await getBannerState()).snapshot.banners.map((b) => b.id), [5]);
 });

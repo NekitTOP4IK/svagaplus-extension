@@ -2,11 +2,12 @@ import browser from '../../shared/browser';
 import { FRONTEND_URL } from '../../shared/config';
 import { getSharedSocket, type ConnectionState } from '../../shared/socket';
 import {
+  BANNER_DISMISSED_KEY,
   BANNER_STATE_KEY,
   UPDATE_STATE_KEY,
   getBannerState,
   getUpdateState,
-  setBannerState,
+  setBannerDismissed,
   setUpdateState,
 } from '../../shared/storage';
 import { deriveNotice, dismissNotice, EMPTY_UPDATE_STATE, type UpdateNotice, type UpdateState } from '../update-notice/model';
@@ -20,7 +21,7 @@ import {
   type BannerState,
   type ChatPlate,
 } from './model';
-import { renderBanner, renderConnectionLost } from './render';
+import { renderBanner, renderConnectionLost, retryLabel } from './render';
 
 const CONNECTION_LOST_AFTER_FAILURES = 3;
 const RECHECK_MS = 60_000;
@@ -39,7 +40,7 @@ function chatInput(): Element | null {
 
 function dismissById(id: number): void {
   getBannerState()
-    .then((state) => setBannerState(dismissBanner(state, id)))
+    .then((state) => setBannerDismissed(dismissBanner(state, id).dismissed))
     .catch(() => undefined);
 }
 
@@ -47,10 +48,8 @@ function secondsUntil(retryAt: number | null, now: number): number | null {
   return retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
 }
 
-function watchBannerState(onChange: () => void): void {
-  browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && BANNER_STATE_KEY in changes) onChange();
-  });
+function bannersChanged(changes: Record<string, unknown>): boolean {
+  return BANNER_STATE_KEY in changes || BANNER_DISMISSED_KEY in changes;
 }
 
 /**
@@ -110,7 +109,7 @@ export function startChatNotices(): void {
         return `banner:${plate.banner.id}:${banners.snapshot?.revision}:${phase}`;
       }
       case 'connection':
-        return `connection:${plate.retryAt === null ? 'idle' : 'counting'}`;
+        return 'connection';
     }
   };
 
@@ -134,9 +133,8 @@ export function startChatNotices(): void {
 
     const key = keyOf(chosen, now);
     if (mounted?.key === key) {
-      const seconds = chosen.kind === 'connection' ? secondsUntil(chosen.retryAt, now) : null;
       const label = mounted.plate.querySelector('.svp-notice__muted');
-      if (label && seconds !== null) label.textContent = `Повтор через ${seconds} с…`;
+      if (label && chosen.kind === 'connection') label.textContent = retryLabel(secondsUntil(chosen.retryAt, now));
     } else {
       mounted?.plate.remove();
       mounted = { key, plate: build(chosen, now) };
@@ -161,7 +159,7 @@ export function startChatNotices(): void {
   };
 
   browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (BANNER_STATE_KEY in changes || UPDATE_STATE_KEY in changes)) refresh();
+    if (area === 'local' && (bannersChanged(changes) || UPDATE_STATE_KEY in changes)) refresh();
   });
   socket?.onState((next) => {
     if (next.connected) connectionHidden = false;
@@ -195,6 +193,8 @@ export function startPopupBanners(container: HTMLElement): void {
   const refresh = (): void => {
     getBannerState().then(render).catch(() => undefined);
   };
-  watchBannerState(refresh);
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && bannersChanged(changes)) refresh();
+  });
   refresh();
 }
