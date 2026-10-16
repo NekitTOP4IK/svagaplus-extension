@@ -31,6 +31,7 @@ import {
 } from '../features/social-rating/background';
 import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
 import { startUpdateChecks } from '../features/update-notice/background';
+import { startBannerChecks } from '../features/banners/background';
 import { ChannelSnapshotStore, type SnapshotEvent } from '../features/tribute-badges/snapshot-store';
 
 type ViewerAccountResponse = {
@@ -1133,6 +1134,7 @@ browser.runtime.onInstalled.addListener(() => {
 });
 
 startUpdateChecks();
+startBannerChecks();
 
 browser.runtime.onStartup.addListener(() => {
   void validateStoredAccount();

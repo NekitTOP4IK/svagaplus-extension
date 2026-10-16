@@ -5,6 +5,7 @@ import type { ExtensionSettings, ViewerAccount, ViewerAuthFeedback } from '../sh
 import { aliasExportFilename, formatAliasCount, parseAliasImport, toSortedAliasItems, type AliasItem } from './alias-list';
 import { buildPopupErrorBanner, type PopupErrorBanner } from './error-banner';
 import { startPopupUpdateNotice } from '../features/update-notice';
+import { startPopupBanners } from '../features/banners';
 import { derivePopupView, shouldApplyMetricsResponse, type AccountView, type PopupMetricsState, type PopupRating, type PopupState, type UiStatus } from './view-model';
 
 type ViewerAccountResponse = {
@@ -540,6 +541,8 @@ bindAliasEvents();
 render();
 const updateNotice = document.getElementById('updateNotice');
 if (updateNotice) startPopupUpdateNotice(updateNotice);
+const bannerStack = document.getElementById('bannerStack');
+if (bannerStack) startPopupBanners(bannerStack);
 void loadState();
 void loadAliases();
 

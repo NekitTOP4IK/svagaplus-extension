@@ -6,7 +6,7 @@ import { renderNotice, type NoticeVariant } from './render';
 
 type Mount = (plate: HTMLElement) => boolean;
 
-function watchNotice(variant: NoticeVariant, mount: Mount): { remount: () => void } {
+function watchNotice(variant: NoticeVariant, mount: Mount): void {
   const current = browser.runtime.getManifest().version;
   let notice: UpdateNotice | null = null;
   let plate: HTMLElement | null = null;
@@ -40,32 +40,6 @@ function watchNotice(variant: NoticeVariant, mount: Mount): { remount: () => voi
     if (area === 'local' && UPDATE_STATE_KEY in changes) refresh();
   });
   refresh();
-  return { remount };
-}
-
-function chatInput(): Element | null {
-  return document.querySelector('.chat-input')
-    ?? document.querySelector('[data-a-target="chat-input"]')?.closest('form')
-    ?? null;
-}
-
-/** Plate above the chat input; Twitch rebuilds the chat column, so it is re-attached on DOM changes. */
-export function startChatUpdateNotice(): void {
-  let scheduled = false;
-  const { remount } = watchNotice('compact', (plate) => {
-    const input = chatInput();
-    if (!input) return false;
-    input.before(plate);
-    return true;
-  });
-  new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    window.requestAnimationFrame(() => {
-      scheduled = false;
-      remount();
-    });
-  }).observe(document.body, { childList: true, subtree: true });
 }
 
 export function startPopupUpdateNotice(container: HTMLElement): void {

@@ -281,3 +281,14 @@
 .update-notice-slot:empty {
   display: none;
 }
+
+.banner-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.banner-stack:empty {
+  display: none;
+}
