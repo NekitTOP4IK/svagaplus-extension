@@ -40,6 +40,20 @@
   а новый пуш в pull request отменяет предыдущий прогон.
 - Сборки каждого прогона, в том числе для pull request, можно скачать из артефакта
   `extension-archives` (хранится 30 дней).
+- Вход через Twitch работает в распакованных сборках Chrome. Redirect URI авторизации
+  зависит от ID расширения, а у распакованной сборки ID раньше считался из пути к папке
+  и был у каждого свой. Теперь ID задаётся полем `key` в манифесте
+  (`scripts/chrome-keys.cjs`):
+  - новый архив релиза `svagaplus-extension-chrome-unpacked-v*.zip` — для ручной
+    установки, с ключом Chrome Web Store и тем же ID `olbjpkkkcabbnacfekfohmpadfffdfgm`;
+  - архив `svagaplus-extension-chrome-v*.zip` для загрузки в стор остаётся без ключа;
+  - staging и локальные сборки (`dist/chrome-dev`) получают свой постоянный ID
+    `cfhgnfinjgfehpgpdmmcbppigdijjcmb`, поэтому их можно держать рядом с версией из стора.
+  CI проверяет ключи в собранных манифестах и в обоих Chrome-архивах.
+
+### Прочее
+
+- Версия повышена до `1.4.0` в `package.json` и `package-lock.json`
 
 ---
 
