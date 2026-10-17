@@ -3,6 +3,7 @@ const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
 const { version } = require('./package.json');
 const { channelOf, outDirOf, BUILD_INFO_FILE } = require('./scripts/build-channel.cjs');
+const { assertKeyMatchesId, withManifestKey } = require('./scripts/chrome-keys.cjs');
 
 const DEFAULTS = {
   BACKEND_URL_PROD: 'https://svagaplus.com',
@@ -68,6 +69,11 @@ module.exports = (env = {}) => {
                 .replace(/__FRONTEND_URL__/g, frontend)
                 .replace(/__BACKEND_HOST__/g, backendHost)
                 .replace(/__UPDATE_URL__/g, updateUrl);
+              // Prod-сборка уходит в Chrome Web Store, где ID задаёт стор, поэтому
+              // ключ получают только распакованные dev-сборки.
+              if (!isFirefox && !isProd) {
+                manifest = withManifestKey(manifest, assertKeyMatchesId('staging').key);
+              }
               return manifest;
             },
           },

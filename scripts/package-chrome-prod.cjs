@@ -9,6 +9,7 @@ const { ZipArchive } = require('archiver');
 const rootDir = path.resolve(__dirname, '..');
 const { name, version } = require(path.join(rootDir, 'package.json'));
 const { outDirOf, assertProdChannel } = require('./build-channel.cjs');
+const { assertKeyMatchesId, withManifestKey } = require('./chrome-keys.cjs');
 
 const distDir = path.join(rootDir, outDirOf({ prod: true }));
 const artifactsDir = path.join(rootDir, 'artifacts');
@@ -22,10 +23,13 @@ assertProdChannel(distDir);
 
 fs.mkdirSync(artifactsDir, { recursive: true });
 
-const archivePath = path.join(artifactsDir, `${name}-chrome-v${version}.zip`);
-fs.rmSync(archivePath, { force: true });
+const storeArchivePath = path.join(artifactsDir, `${name}-chrome-v${version}.zip`);
+// Для установки из релиза на GitHub: ключ стора даёт тот же ID, что у версии
+// из Chrome Web Store, а значит и уже зарегистрированный redirect URI.
+const unpackedArchivePath = path.join(artifactsDir, `${name}-chrome-unpacked-v${version}.zip`);
 
-function createArchive() {
+function createArchive(archivePath, manifestOverride) {
+  fs.rmSync(archivePath, { force: true });
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(archivePath);
     const archive = new ZipArchive({ zlib: { level: 9 } });
@@ -36,18 +40,32 @@ function createArchive() {
     archive.on('error', reject);
 
     archive.pipe(output);
-    // false — содержимое кладётся в корень архива, без префикса каталога.
-    archive.directory(distDir, false);
+    if (manifestOverride) {
+      // false — содержимое кладётся в корень архива, без префикса каталога.
+      archive.directory(distDir, false, (entry) => (entry.name === 'manifest.json' ? false : entry));
+      archive.append(manifestOverride, { name: 'manifest.json' });
+    } else {
+      archive.directory(distDir, false);
+    }
     archive.finalize();
   });
 }
 
-createArchive()
-  .then((bytes) => {
+async function main() {
+  const storeKey = assertKeyMatchesId('store').key;
+  const manifest = fs.readFileSync(path.join(distDir, 'manifest.json'), 'utf8');
+
+  for (const [archivePath, manifestOverride] of [
+    [storeArchivePath, null],
+    [unpackedArchivePath, withManifestKey(manifest, storeKey)],
+  ]) {
+    const bytes = await createArchive(archivePath, manifestOverride);
     console.log(`Created ${path.relative(rootDir, archivePath)} (${bytes} bytes)`);
-  })
-  .catch((err) => {
-    // Без явного кода выхода npm счёл бы упавшую упаковку успешной.
-    console.error(`Failed to create ${path.relative(rootDir, archivePath)}: ${err.message}`);
-    process.exitCode = 1;
-  });
+  }
+}
+
+main().catch((err) => {
+  // Без явного кода выхода npm счёл бы упавшую упаковку успешной.
+  console.error(`Failed to package Chrome archives: ${err.message}`);
+  process.exitCode = 1;
+});

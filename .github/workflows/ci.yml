@@ -84,6 +84,17 @@ jobs:
           if (prod.backendUrl.includes('staging')) {
             throw new Error(`prod build points at a staging backend: ${prod.backendUrl}`);
           }
+
+          // От ID расширения зависит redirect URI авторизации: staging-сборка
+          // должна получить staging-ID, а архив для стора — остаться без ключа.
+          const { CHROME_KEYS, extensionIdFromKey } = require('./scripts/chrome-keys.cjs');
+          const devKey = JSON.parse(fs.readFileSync('dist/chrome-dev/manifest.json', 'utf8')).key;
+          if (!devKey || extensionIdFromKey(devKey) !== CHROME_KEYS.staging.id) {
+            throw new Error('dist/chrome-dev: manifest key does not give the staging extension ID');
+          }
+          if ('key' in JSON.parse(fs.readFileSync('dist/chrome-prod/manifest.json', 'utf8'))) {
+            throw new Error('dist/chrome-prod: the Chrome Web Store build must not carry a manifest key');
+          }
           console.log('manifests and channels verified');
           NODE
 
@@ -94,13 +105,25 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           CHROME="artifacts/svagaplus-extension-chrome-v${VERSION}.zip"
+          CHROME_UNPACKED="artifacts/svagaplus-extension-chrome-unpacked-v${VERSION}.zip"
           FIREFOX="artifacts/svagaplus-extension-firefox-v${VERSION}.zip"
           (cd dist/firefox-prod && zip -rq "../../${FIREFOX}" .)
-          for archive in "$CHROME" "$FIREFOX"; do
+          for archive in "$CHROME" "$CHROME_UNPACKED" "$FIREFOX"; do
             test -s "$archive"
             unzip -tq "$archive"
             unzip -Z1 "$archive" | grep -Fxq manifest.json
           done
+          unzip -p "$CHROME" manifest.json | node -e '
+            const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            if ("key" in m) throw new Error("store archive must not carry a manifest key");
+          '
+          unzip -p "$CHROME_UNPACKED" manifest.json | node -e '
+            const { CHROME_KEYS, extensionIdFromKey } = require("./scripts/chrome-keys.cjs");
+            const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            if (!m.key || extensionIdFromKey(m.key) !== CHROME_KEYS.store.id) {
+              throw new Error("unpacked archive key does not give the Chrome Web Store extension ID");
+            }
+          '
           (cd artifacts && sha256sum -- *.zip > SHA256SUMS)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
