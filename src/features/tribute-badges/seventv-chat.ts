@@ -1,4 +1,4 @@
-import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
+import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, loginFromNameElement, showTooltip } from './dom';
 import type { Badge, ViewerConfig } from './types';
 import {
   beginBadgeRender,
@@ -25,9 +25,7 @@ export function processSevenTVMessage(messageElement: Element, context: SevenTVC
     if (existingLogin && shouldSkipBadgeRender(element, existingLogin)) return;
   }
 
-  const rawText = (usernameEl.textContent || '').replace(/^@/, '').trim();
-  const intlMatch = rawText.match(/\((\w+)\)\s*$/);
-  const username = normalizeLogin(intlMatch ? intlMatch[1] : rawText);
+  const username = loginFromNameElement(usernameEl);
   if (!username) return;
 
   userBlock.dataset.tcbUser = username;
@@ -52,9 +50,7 @@ export function processSevenTVMessage(messageElement: Element, context: SevenTVC
         const candidates = document.querySelectorAll<HTMLElement>('.seventv-user-message, .seventv-message');
         for (const cand of Array.from(candidates)) {
           const nameEl = cand.querySelector<HTMLElement>('.seventv-chat-user-username');
-          const raw = (nameEl?.textContent || '').replace(/^@/, '').trim();
-          const intlMatch = raw.match(/\((\w+)\)\s*$/);
-          const candLogin = normalizeLogin(intlMatch ? intlMatch[1] : raw);
+          const candLogin = nameEl ? loginFromNameElement(nameEl) : '';
           if (candLogin === username && cand.isConnected) {
             targetElement = cand;
             break;

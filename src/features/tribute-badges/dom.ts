@@ -1,3 +1,4 @@
+import { normalizeTwitchLogin } from '../../shared/twitch';
 import type { Badge, FontPreset, ViewerConfig } from './types';
 
 export const tooltip = document.createElement('div');
@@ -5,6 +6,23 @@ tooltip.id = 'tcb-custom-tooltip';
 
 export function normalizeLogin(value: string | null | undefined): string {
   return (value || '').toLowerCase().trim();
+}
+
+/**
+ * Алиасы соц. рейтинга подменяют текст ника, а настоящий логин кладут в
+ * data-tsr-login. Фон отклоняет всю пачку, если в ней есть не-логин, поэтому
+ * всё, что не похоже на логин Twitch, отбрасывается здесь.
+ */
+export function loginFromNameElement(nameEl: Element): string {
+  const native = nameEl.getAttribute('data-a-user') || nameEl.parentElement?.getAttribute('data-a-user');
+  const aliased = nameEl.getAttribute('data-tsr-aliased') === 'true' ? nameEl.getAttribute('data-tsr-login') : null;
+  let raw = native || aliased;
+  if (!raw) {
+    const text = (nameEl.textContent || '').replace(/^@/, '').trim();
+    const intlMatch = text.match(/\(([^)]+)\)\s*$/);
+    raw = intlMatch ? intlMatch[1] : text;
+  }
+  return normalizeTwitchLogin(raw) ?? '';
 }
 
 export function showTooltip(event: Event, text: string | null | undefined): void {
