@@ -32,7 +32,7 @@ import {
 import { apiCooldown, channelBadgesKey } from '../shared/request-cooldown';
 import { startUpdateChecks } from '../features/update-notice/background';
 import { startBannerChecks } from '../features/banners/background';
-import { ChannelSnapshotStore, type SnapshotEvent } from '../features/tribute-badges/snapshot-store';
+import { ChannelSnapshotStore, type SnapshotEvent, type SnapshotStorage } from '../features/tribute-badges/snapshot-store';
 
 type ViewerAccountResponse = {
   ok: true;
@@ -129,11 +129,22 @@ async function restoreApiCooldown(): Promise<void> {
   persist(apiCooldown.snapshot());
 }
 
+function sessionSnapshotStorage(): SnapshotStorage | undefined {
+  const area = browser.storage?.session;
+  if (!area) return undefined;
+  return {
+    get: async (key) => (await area.get(key))?.[key],
+    set: async (key, value) => area.set({ [key]: value }),
+    remove: async (key) => area.remove(key),
+  };
+}
+
 const channelSnapshots = new ChannelSnapshotStore({
   backendUrl: BACKEND_URL,
   fetch: (url, init) => fetch(url, init),
   cooldown: apiCooldown,
   cooldownReady: apiCooldownRestored,
+  storage: sessionSnapshotStorage(),
 });
 
 const SNAPSHOT_EVENT_TYPES = new Set<SnapshotEvent['type']>([

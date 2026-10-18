@@ -51,6 +51,13 @@ type Entry = {
   waiters: Array<() => void>;
   retryAt: number;
   usedAt: number;
+  restoring: Promise<void> | null;
+};
+
+export type SnapshotStorage = {
+  get(key: string): Promise<unknown>;
+  set(key: string, value: unknown): Promise<void>;
+  remove(key: string): Promise<void>;
 };
 
 export type ChannelSnapshotStoreOptions = {
@@ -58,6 +65,7 @@ export type ChannelSnapshotStoreOptions = {
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   cooldown: RequestCooldown;
   cooldownReady?: Promise<void>;
+  storage?: SnapshotStorage;
   holdMs?: number;
   jitterMs?: number;
   timeoutMs?: number;
@@ -68,6 +76,7 @@ export type ChannelSnapshotStoreOptions = {
 const IDLE_DROP_MS = 30 * 60 * 1000;
 const MAX_CHANNELS = 16;
 const VIEWER_EVENT_FIELDS_TO_DROP = ['twitch_username', 'badges', 'font_presets'];
+const STORAGE_KEY_PREFIX = 'channel-snapshot:';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -134,6 +143,7 @@ export class ChannelSnapshotStore {
   async open(channel: string): Promise<SnapshotMode> {
     const entry = this.entry(channel);
     await this.options.cooldownReady;
+    await this.restore(channel, entry);
     if (entry.mode === 'snapshot' && !entry.loading) return 'snapshot';
     if (!entry.loading) {
       if (this.isUnknown(channel)) {
@@ -216,6 +226,7 @@ export class ChannelSnapshotStore {
         waiters: [],
         retryAt: 0,
         usedAt: 0,
+        restoring: null,
       };
       this.entries.set(channel, entry);
     }
@@ -232,6 +243,7 @@ export class ChannelSnapshotStore {
     for (const [channel, entry] of idle) {
       if (excess <= 0 && now - entry.usedAt < IDLE_DROP_MS) break;
       this.entries.delete(channel);
+      this.forget(channel);
       excess -= 1;
     }
   }
@@ -265,6 +277,42 @@ export class ChannelSnapshotStore {
     entry.holdTimer = null;
   }
 
+  /**
+   * MV3 service worker засыпает после ~30 с простоя и теряет память, а в тихом
+   * чате будит его каждый новый чатер. Сохранённый snapshot не принимается на
+   * веру: mode остаётся null, и первая загрузка уходит с If-None-Match, потому
+   * что события сокета, пока воркер спал, до него не доходили.
+   */
+  private restore(channel: string, entry: Entry): Promise<void> {
+    if (!this.options.storage || entry.mode !== null || entry.data) return Promise.resolve();
+    entry.restoring ??= (async () => {
+      let stored: unknown = null;
+      try {
+        stored = await this.options.storage!.get(STORAGE_KEY_PREFIX + channel);
+      } catch {
+        return;
+      }
+      if (!isRecord(stored) || typeof stored.etag !== 'string' || entry.mode !== null || entry.data) return;
+      const parsed = parseSnapshot({ data: stored.data }, stored.etag);
+      if (parsed.kind !== 'ok') return;
+      entry.rev = parsed.rev;
+      entry.globalRev = parsed.globalRev;
+      entry.etag = parsed.etag;
+      entry.data = parsed.data;
+    })();
+    return entry.restoring;
+  }
+
+  private persist(channel: string, entry: Entry): void {
+    if (!this.options.storage || !entry.data || !entry.etag) return;
+    const data = { rev: entry.rev, global_rev: entry.globalRev, ...entry.data };
+    this.options.storage.set(STORAGE_KEY_PREFIX + channel, { etag: entry.etag, data }).catch(() => {});
+  }
+
+  private forget(channel: string): void {
+    this.options.storage?.remove(STORAGE_KEY_PREFIX + channel).catch(() => {});
+  }
+
   private load(channel: string, entry: Entry): Promise<void> {
     if (entry.loading) return entry.loading;
     if (entry.refetchTimer) clearTimeout(entry.refetchTimer);
@@ -286,6 +334,7 @@ export class ChannelSnapshotStore {
       entry.globalRev = result.globalRev;
       entry.etag = result.etag;
       entry.data = result.data;
+      this.persist(channel, entry);
     }
     switch (result.kind) {
       case 'ok':
@@ -298,9 +347,11 @@ export class ChannelSnapshotStore {
       case 'unknown':
         this.options.cooldown.mark(channelBadgesKey(channel), 'not_found');
         this.reset(entry, 'unknown');
+        this.forget(channel);
         return;
       case 'missing':
         this.reset(entry, 'legacy');
+        this.forget(channel);
         entry.retryAt = this.now() + NOT_FOUND_TTL_MS;
         return;
       case 'failed':
