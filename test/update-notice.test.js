@@ -58,6 +58,14 @@ test('Firefox takes the newest of its builds', () => {
   assert.equal(release.url, 'https://addons.mozilla.org/svaga');
 });
 
+test('a newer self-hosted Firefox build sends the update to the download page, not the bare .xpi', () => {
+  const amo = { firefox_store_version: '1.3.0', firefox_store_url: 'https://addons.mozilla.org/svaga' };
+  const release = pickRelease({ ...info, ...amo }, { firefox: true, storeInstall: false }, BACKEND);
+  assert.equal(release.version, '1.4.1');
+  assert.equal(release.url, null);
+  assert.equal(deriveNotice(state({ release }), '1.3.0', NOW, SITE).action.url, 'https://svaga.test/extension/download');
+});
+
 test('a newer release shows the red update notice', () => {
   const notice = deriveNotice(state({ release: { version: '1.4.0', minVersion: null, url: 'https://x.test/z.zip' } }), '1.3.0', NOW, SITE);
   assert.deepEqual(notice, {

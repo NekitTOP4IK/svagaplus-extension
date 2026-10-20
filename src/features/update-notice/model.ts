@@ -67,8 +67,9 @@ export function pickRelease(info: Record<string, unknown>, target: InstallTarget
   const minVersion = text(info.min_version);
   let builds: Array<{ version: string | null; url: string | null }>;
   if (target.firefox) {
+    // No .xpi link: Firefox 153+ refuses an install opened in a new tab, so the update goes through the download page.
     builds = [
-      { version: text(info.firefox_version), url: text(info.firefox_download_url) },
+      { version: text(info.firefox_version), url: null },
       { version: text(info.firefox_store_version), url: text(info.firefox_store_url) },
     ];
   } else if (target.storeInstall) {
@@ -79,7 +80,7 @@ export function pickRelease(info: Record<string, unknown>, target: InstallTarget
   const newest = builds
     .filter((build) => build.version)
     .sort((a, b) => compareVersions(b.version as string, a.version as string))[0];
-  const url = newest?.url ?? builds.find((build) => build.url)?.url ?? null;
+  const url = newest ? newest.url : builds.find((build) => build.url)?.url ?? null;
   return { version: newest?.version ?? null, minVersion, url: absolute(url, backendUrl) };
 }
 
