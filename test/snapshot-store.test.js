@@ -285,3 +285,58 @@ test('user_update that cannot be patched refetches', async () => {
   assert.deepEqual((await store.answer('olesha', ['bob'])).viewers.bob, { badge_ids: ['b1'] });
   assert.equal(calls.length, 2);
 });
+
+function memoryStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    values,
+    get: async (key) => values.get(key),
+    set: async (key, value) => { values.set(key, JSON.parse(JSON.stringify(value))); },
+    remove: async (key) => { values.delete(key); },
+  };
+}
+
+test('a restarted worker revalidates the stored snapshot and answers from it on 304', async () => {
+  const storage = memoryStorage();
+  const first = harness([okSnapshot(10, 3, { alice: ALICE }, { b1: { url: 'b1' } })], { storage });
+  await first.store.open('olesha');
+  assert.ok(storage.values.has('channel-snapshot:olesha'));
+
+  const restarted = harness([reply(304, null)], { storage });
+  const answer = await restarted.store.answer('olesha', ['alice']);
+  assert.equal(restarted.calls.length, 1);
+  assert.equal(restarted.calls[0].headers['If-None-Match'], '"10.3"');
+  assert.deepEqual(answer.viewers.alice.badge_ids, ['b1']);
+  assert.deepEqual(answer.badges, { b1: { url: 'b1' } });
+  assert.equal(restarted.store.revisionOf('olesha'), 10);
+});
+
+test('a stored snapshot that changed while the worker slept is replaced', async () => {
+  const storage = memoryStorage();
+  await harness([okSnapshot(10, 3, { alice: ALICE })], { storage }).store.open('olesha');
+
+  const restarted = harness([okSnapshot(11, 3, { alice: { badge_ids: ['b2'] } })], { storage });
+  const answer = await restarted.store.answer('olesha', ['alice']);
+  assert.deepEqual(answer.viewers.alice.badge_ids, ['b2']);
+  assert.equal(storage.values.get('channel-snapshot:olesha').data.rev, 11);
+});
+
+test('corrupted or unreadable stored snapshots fall back to a plain fetch', async () => {
+  const corrupted = memoryStorage({ 'channel-snapshot:olesha': { etag: '"1.1"', data: { rev: 'x' } } });
+  const a = harness([okSnapshot(10, 3)], { storage: corrupted });
+  await a.store.open('olesha');
+  assert.equal(a.calls[0].headers['If-None-Match'], undefined);
+
+  const failing = { get: async () => { throw new Error('quota'); }, set: async () => { throw new Error('quota'); }, remove: async () => {} };
+  const b = harness([okSnapshot(10, 3)], { storage: failing });
+  assert.equal(await b.store.open('olesha'), 'snapshot');
+  assert.equal(b.calls[0].headers['If-None-Match'], undefined);
+});
+
+test('a channel that turns unknown drops its stored snapshot', async () => {
+  const storage = memoryStorage();
+  await harness([okSnapshot(10, 3)], { storage }).store.open('olesha');
+  const restarted = harness([reply(404, { error: 'channel_not_found' })], { storage });
+  assert.equal(await restarted.store.open('olesha'), 'unknown');
+  assert.equal(storage.values.has('channel-snapshot:olesha'), false);
+});

@@ -1,5 +1,5 @@
 import type { Badge, ViewerConfig } from './types';
-import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, normalizeLogin, showTooltip } from './dom';
+import { applyViewerNameStyle, createBadgeImg, dedupeBadges, hideTooltip, loginFromNameElement, showTooltip } from './dom';
 import {
   beginBadgeRender,
   failBadgeRender,
@@ -24,7 +24,7 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
     if (existingLogin && shouldSkipBadgeRender(element, existingLogin)) return;
   }
 
-  const username = normalizeLogin(usernameElement.getAttribute('data-a-user') || usernameElement.parentElement?.getAttribute('data-a-user') || usernameElement.textContent);
+  const username = loginFromNameElement(usernameElement);
   if (!username) return;
 
   usernameElement.dataset.tcbUser = username;
@@ -51,7 +51,7 @@ export function processNativeMessage(messageElement: Element, context: NativeCha
         const candidates = document.querySelectorAll<HTMLElement>('.chat-line__message');
         for (const cand of Array.from(candidates)) {
           const nameEl = cand.querySelector<HTMLElement>('.chat-author__display-name, .message-author__display-name, .chatter-name');
-          const candLogin = normalizeLogin(nameEl?.getAttribute('data-a-user') || nameEl?.textContent || '');
+          const candLogin = nameEl ? loginFromNameElement(nameEl) : '';
           if (candLogin === username && cand.isConnected) {
             targetElement = cand;
             break;

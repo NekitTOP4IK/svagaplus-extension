@@ -1,9 +1,10 @@
 import { BACKEND_URL } from '../../shared/config';
 import browser from '../../shared/browser';
 import { getSharedSocket, type SharedSocket } from '../../shared/socket';
+import { normalizeTwitchLogin } from '../../shared/twitch';
 import { fetchBadgeCard, fetchChannelBadges, normalizeViewerBadges } from './api';
 import { initBadgeCards } from './badge-card';
-import { normalizeLogin, updateDynamicStyles } from './dom';
+import { loginFromNameElement, normalizeLogin, updateDynamicStyles } from './dom';
 import { processNativeMessage } from './native-chat';
 import { processSevenTVMessage } from './seventv-chat';
 import { USERCARD_SELECTOR, processUserCard } from './usercard';
@@ -351,7 +352,8 @@ async function flushOneViewerBadgeChunk(channelName: string, logins: string[]): 
 
 function resolveBadgesForLogin(channelName: string | null, login: string, force = false): Promise<Badge[]> {
   const normalizedChannel = normalizeLogin(channelName);
-  const normalizedLoginValue = normalizeLogin(login);
+  // Один не-логин в пачке валит её целиком, вместе с бейджами соседей.
+  const normalizedLoginValue = normalizeTwitchLogin(login);
   if (!normalizedChannel || !normalizedLoginValue) return Promise.resolve([]);
 
   const key = viewerBadgeKey(normalizedChannel, normalizedLoginValue);
@@ -397,9 +399,7 @@ const tributeContext = {
 export function collectVisibleLogins(): string[] {
   const logins = new Set<string>();
   document.querySelectorAll(`${CHAT_SCOPED_NAME_SELECTOR}, .seventv-user-message .seventv-chat-user-username`).forEach((el) => {
-    const raw = (el.textContent || '').replace(/^@/, '').trim();
-    const match = raw.match(/\(([^)]+)\)\s*$/);
-    const login = normalizeLogin(match ? match[1] : raw);
+    const login = loginFromNameElement(el);
     if (login) logins.add(login);
   });
   return Array.from(logins);
@@ -898,14 +898,7 @@ function loginOfElement(el: HTMLElement, nameSelector: string): string {
   const known = el.dataset.tcbUserLogin;
   if (known) return normalizeLogin(known);
   const nameEl = el.querySelector<HTMLElement>(nameSelector);
-  if (!nameEl) return '';
-  const raw = (nameEl.textContent || '').replace(/^@/, '').trim();
-  const intlMatch = raw.match(/\(([^)]+)\)\s*$/);
-  return normalizeLogin(
-    nameEl.getAttribute('data-a-user') ||
-    nameEl.parentElement?.getAttribute('data-a-user') ||
-    (intlMatch ? intlMatch[1] : raw)
-  );
+  return nameEl ? loginFromNameElement(nameEl) : '';
 }
 
 function flushRefreshQueue(): void {
